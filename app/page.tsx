@@ -6,16 +6,18 @@ export default function Home() {
 
       {/* Navigation */}
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-8 py-6">
-        <div className="text-2xl font-bold">
+
+        <Link href="/" className="text-2xl font-bold">
           Student<span className="text-green-600">InItaly</span>
-        </div>
+        </Link>
 
         <Link
-          href="/apply"
+          href="/jobs"
           className="rounded-full bg-green-600 px-6 py-3 font-semibold text-white transition hover:bg-green-700"
         >
-          Create my application →
+          Find a job →
         </Link>
+
       </nav>
 
       {/* Hero */}
@@ -34,27 +36,28 @@ export default function Home() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-600">
-          Create a professional job application in minutes,
-          even if your Italian isn't perfect.
+          Find real job opportunities in Italy and create a professional
+          application with AI.
         </p>
 
         <div className="mt-10 flex flex-col justify-center gap-4 sm:flex-row">
 
           <Link
-            href="/apply"
+            href="/jobs"
             className="rounded-full bg-green-600 px-8 py-4 font-semibold text-white transition hover:bg-green-700"
           >
-            Get started →
+            Find a job →
           </Link>
 
-          <a
-            href="#how-it-works"
+          <Link
+            href="/apply"
             className="rounded-full border border-gray-300 px-8 py-4 font-semibold transition hover:bg-gray-100"
           >
-            How it works
-          </a>
+            Create an application
+          </Link>
 
         </div>
+
       </section>
 
       {/* How it works */}
@@ -65,106 +68,85 @@ export default function Home() {
         <div className="mx-auto max-w-6xl">
 
           <h2 className="text-center text-3xl font-bold">
-            Get ready to apply in 3 steps
+            Find a job and apply in 3 steps
           </h2>
 
           <div className="mt-12 grid gap-8 md:grid-cols-3">
 
             {/* Step 1 */}
             <div className="rounded-2xl bg-white p-8 shadow-sm">
+
               <div className="mb-4 text-3xl">
-                📄
+                🔎
               </div>
 
               <h3 className="text-xl font-semibold">
-                1. Add your information
+                1. Find a job
               </h3>
 
               <p className="mt-3 text-gray-600">
-                Tell us about your experience, skills and the job you want.
+                Search real job opportunities by job title and city.
               </p>
+
             </div>
 
             {/* Step 2 */}
             <div className="rounded-2xl bg-white p-8 shadow-sm">
+
               <div className="mb-4 text-3xl">
                 🤖
               </div>
 
               <h3 className="text-xl font-semibold">
-                2. Build your application
+                2. Apply with AI
               </h3>
 
               <p className="mt-3 text-gray-600">
-                Our AI creates a message, email and cover letter adapted to
-                the job.
+                Create a professional application adapted to the job.
               </p>
+
             </div>
 
             {/* Step 3 */}
             <div className="rounded-2xl bg-white p-8 shadow-sm">
+
               <div className="mb-4 text-3xl">
                 🚀
               </div>
 
               <h3 className="text-xl font-semibold">
-                3. Apply
+                3. Get hired
               </h3>
 
               <p className="mt-3 text-gray-600">
                 Send your application to Italian employers with confidence.
               </p>
+
             </div>
 
           </div>
+
         </div>
       </section>
 
-      {/* Pricing */}
+      {/* CTA */}
       <section className="px-6 py-20 text-center">
 
-        <p className="text-sm font-semibold text-green-600">
-          SIMPLE PRICING
-        </p>
-
-        <h2 className="mt-2 text-3xl font-bold">
-          Your first application, made easy.
+        <h2 className="text-3xl font-bold">
+          Ready to find your next job?
         </h2>
 
-        <p className="mt-4 text-gray-600">
-          One simple application pack.
+        <p className="mx-auto mt-4 max-w-xl text-gray-600">
+          Search thousands of opportunities and start applying today.
         </p>
 
-        <div className="mx-auto mt-10 max-w-sm rounded-3xl border border-gray-200 p-8 shadow-sm">
+        <Link
+          href="/jobs"
+          className="mt-8 inline-block rounded-full bg-green-600 px-8 py-4 font-semibold text-white transition hover:bg-green-700"
+        >
+          Search jobs →
+        </Link>
 
-          <h3 className="text-xl font-semibold">
-            Job Application Pack
-          </h3>
-
-          <div className="mt-5 text-5xl font-bold">
-            €4.90
-          </div>
-
-          <p className="mt-2 text-gray-500">
-            per application
-          </p>
-
-          <ul className="mt-8 space-y-3 text-left text-gray-700">
-            <li>✓ CV adapted to the job</li>
-            <li>✓ WhatsApp message</li>
-            <li>✓ Professional email</li>
-            <li>✓ Cover letter</li>
-            <li>✓ Interview preparation</li>
-          </ul>
-
-          <Link
-            href="/apply"
-            className="mt-8 block w-full rounded-full bg-green-600 py-3 text-center font-semibold text-white transition hover:bg-green-700"
-          >
-            Get started →
-          </Link>
-
-        </div>
       </section>
 
       {/* Footer */}
