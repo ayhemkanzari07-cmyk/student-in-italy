@@ -49,11 +49,16 @@ function ApplicationForm() {
 
       const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Something went wrong");
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Something went wrong.");
       }
 
-      setMessage(data.message);
+      sessionStorage.setItem(
+        "applicationPack",
+        JSON.stringify(data.applicationPack)
+      );
+
+      window.location.href = "/apply/result";
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -119,7 +124,6 @@ function ApplicationForm() {
             className="mt-8 space-y-6"
           >
 
-            {/* CV */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Upload your CV
@@ -136,7 +140,9 @@ function ApplicationForm() {
               <input
                 type="file"
                 accept=".pdf,.doc,.docx"
-                onChange={(e) => setCv(e.target.files?.[0] || null)}
+                onChange={(e) =>
+                  setCv(e.target.files?.[0] || null)
+                }
                 className="mt-3 block w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-700"
               />
 
@@ -147,7 +153,6 @@ function ApplicationForm() {
               )}
             </div>
 
-            {/* Name */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your name
@@ -163,7 +168,6 @@ function ApplicationForm() {
               />
             </div>
 
-            {/* Italian */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your Italian level
@@ -188,7 +192,6 @@ function ApplicationForm() {
               </select>
             </div>
 
-            {/* Experience */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your experience
@@ -204,7 +207,6 @@ function ApplicationForm() {
               />
             </div>
 
-            {/* Skills */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your skills
@@ -220,7 +222,6 @@ function ApplicationForm() {
               />
             </div>
 
-            {/* Availability */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your availability
@@ -249,7 +250,7 @@ function ApplicationForm() {
           </form>
 
           {message && (
-            <div className="mt-6 rounded-2xl bg-green-50 p-5 text-green-700">
+            <div className="mt-6 rounded-2xl bg-red-50 p-5 text-red-700">
               {message}
             </div>
           )}
