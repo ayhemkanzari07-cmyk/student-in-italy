@@ -8,6 +8,13 @@ export async function GET(request: Request) {
     const appId = process.env.ADZUNA_APP_ID;
     const appKey = process.env.ADZUNA_APP_KEY;
 
+    console.log("=== ADZUNA ENV CHECK ===");
+    console.log({
+      hasAppId: Boolean(appId),
+      hasAppKey: Boolean(appKey),
+      environment: process.env.VERCEL_ENV || "unknown",
+    });
+
     if (!appId || !appKey) {
       return Response.json(
         {
@@ -32,6 +39,9 @@ export async function GET(request: Request) {
     if (!response.ok) {
       const errorText = await response.text();
 
+      console.error("=== ADZUNA API ERROR ===");
+      console.error(errorText);
+
       return Response.json(
         {
           success: false,
@@ -48,12 +58,16 @@ export async function GET(request: Request) {
       results: data.results || [],
     });
   } catch (error) {
+    console.error("=== ADZUNA SERVER ERROR ===");
     console.error(error);
 
     return Response.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error",
       },
       { status: 500 }
     );
