@@ -1,69 +1,149 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { createClient } from "@/utils/supabase/client";
 
 type InterviewQuestion = {
   question: string;
   answer: string;
 };
 
+type AdvancedInterviewQuestion = {
+  question: string;
+  howToAnswer: string;
+  mistakeToAvoid: string;
+  example: string;
+};
+
 type ApplicationPack = {
   whatsapp: string;
+
   email: {
     subject: string;
     body: string;
   };
+
   coverLetter: string;
+
   interviewPrep: InterviewQuestion[];
+
   cv: {
     title: string;
     profile: string;
     experience: string;
     skills: string;
     availability: string;
-    note: string;
+  };
+
+  proAnalysis?: {
+    matchScore: number;
+    requirements: string[];
+    strategy: string[];
+    checklist: string[];
+    qualityReport: string[];
+    advancedInterviewPrep: AdvancedInterviewQuestion[];
   };
 };
 
-export default function ResultPage() {
+type Application = {
+  id: string;
+  job_title: string;
+  company: string | null;
+  location: string | null;
+  package_type: string;
+  status: string;
+  content: ApplicationPack;
+  created_at: string;
+  expires_at: string;
+};
+
+function ResultContent() {
+  const searchParams = useSearchParams();
+  const applicationId = searchParams.get("id");
+
+  const [application, setApplication] =
+    useState<Application | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
 
-  const data =
-    typeof window !== "undefined"
-      ? sessionStorage.getItem("applicationPack")
-      : null;
+  const supabase = createClient();
 
-  if (!data) {
-    return (
-      <main className="min-h-screen bg-gray-50 px-6 py-12">
-        <div className="mx-auto max-w-3xl rounded-3xl bg-white p-8 text-center shadow-sm">
-          <h1 className="text-2xl font-bold text-gray-900">
-            No application found
-          </h1>
+  useEffect(() => {
+    async function loadApplication() {
+      if (!applicationId) {
+        setError("No application was specified.");
+        setLoading(false);
+        return;
+      }
 
-          <p className="mt-3 text-gray-600">
-            Please create an application first.
-          </p>
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-          <a
-            href="/jobs"
-            className="mt-6 inline-block rounded-full bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700"
-          >
-            Find a job →
-          </a>
-        </div>
-      </main>
-    );
-  }
+      if (!user) {
+        window.location.href = `/login?redirect=${encodeURIComponent(
+          `/apply/result?id=${applicationId}`
+        )}`;
+        return;
+      }
 
-  const applicationPack: ApplicationPack = JSON.parse(data);
+      const { data, error: applicationError } =
+        await supabase
+          .from("applications")
+          .select(
+            "id, job_title, company, location, package_type, status, content, created_at, expires_at"
+          )
+          .eq("id", applicationId)
+          .eq("user_id", user.id)
+          .single();
 
-  async function copyText(text: string, section: string) {
+      if (applicationError || !data) {
+        console.error(
+          "APPLICATION LOAD ERROR:",
+          applicationError
+        );
+
+        setError(
+          "This application could not be found or is no longer available."
+        );
+
+        setLoading(false);
+        return;
+      }
+
+      if (data.status === "expired") {
+        setError(
+          "This application has expired and is no longer available."
+        );
+
+        setLoading(false);
+        return;
+      }
+
+      setApplication(data as Application);
+      setLoading(false);
+    }
+
+    loadApplication();
+  }, [applicationId]);
+
+  async function copyText(
+    text: string,
+    section: string
+  ) {
     try {
-      if (navigator.clipboard && window.isSecureContext) {
+      if (
+        navigator.clipboard &&
+        window.isSecureContext
+      ) {
         await navigator.clipboard.writeText(text);
       } else {
-        const textarea = document.createElement("textarea");
+        const textarea =
+          document.createElement("textarea");
 
         textarea.value = text;
         textarea.style.position = "fixed";
@@ -94,9 +174,63 @@ export default function ResultPage() {
     }
   }
 
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gray-50 px-6 py-12">
+        <div className="mx-auto max-w-4xl rounded-3xl bg-white p-10 text-center shadow-sm">
+          <p className="text-gray-600">
+            Loading your application...
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (error || !application) {
+    return (
+      <main className="min-h-screen bg-gray-50 px-6 py-12">
+        <div className="mx-auto max-w-3xl rounded-3xl bg-white p-8 text-center shadow-sm">
+          <h1 className="text-2xl font-bold text-gray-900">
+            Application unavailable
+          </h1>
+
+          <p className="mt-3 text-gray-600">
+            {error ||
+              "This application could not be loaded."}
+          </p>
+
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Link
+              href="/jobs"
+              className="rounded-full bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700"
+            >
+              Find a job →
+            </Link>
+
+            <Link
+              href="/dashboard"
+              className="rounded-full border border-gray-300 px-6 py-3 font-semibold text-gray-900 hover:bg-gray-50"
+            >
+              Dashboard
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const applicationPack = application.content;
+
+  const isPro =
+    application.package_type === "pro" ||
+    application.package_type === "monthly";
+
+  const proAnalysis = applicationPack.proAnalysis;
+
   return (
     <main className="min-h-screen bg-gray-50 px-6 py-12">
       <div className="mx-auto max-w-4xl">
+        {/* HEADER */}
 
         <div className="mb-10 text-center">
           <p className="text-sm font-semibold text-green-600">
@@ -108,14 +242,31 @@ export default function ResultPage() {
           </h1>
 
           <p className="mt-3 text-gray-600">
-            Everything you need to apply for your job.
+            Everything you need to apply for this job.
           </p>
+
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <span className="rounded-full bg-gray-200 px-4 py-2 text-sm font-semibold capitalize text-gray-700">
+              {application.package_type} package
+            </span>
+
+            {application.company && (
+              <span className="rounded-full bg-gray-200 px-4 py-2 text-sm text-gray-700">
+                {application.company}
+              </span>
+            )}
+
+            {application.location && (
+              <span className="rounded-full bg-gray-200 px-4 py-2 text-sm text-gray-700">
+                📍 {application.location}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* WHATSAPP */}
 
         <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
-
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-green-600">
@@ -137,20 +288,20 @@ export default function ResultPage() {
               }
               className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
-              {copied === "whatsapp" ? "✓ Copied" : "Copy"}
+              {copied === "whatsapp"
+                ? "✓ Copied"
+                : "Copy"}
             </button>
           </div>
 
           <div className="mt-6 rounded-2xl bg-gray-50 p-5 whitespace-pre-line text-gray-700">
             {applicationPack.whatsapp}
           </div>
-
         </section>
 
         {/* EMAIL */}
 
         <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
-
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-green-600">
@@ -172,12 +323,13 @@ export default function ResultPage() {
               }
               className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
-              {copied === "email" ? "✓ Copied" : "Copy"}
+              {copied === "email"
+                ? "✓ Copied"
+                : "Copy"}
             </button>
           </div>
 
           <div className="mt-6">
-
             <div className="rounded-xl bg-gray-100 p-4">
               <p className="text-xs font-semibold uppercase text-gray-500">
                 Subject
@@ -191,15 +343,12 @@ export default function ResultPage() {
             <div className="mt-4 rounded-2xl bg-gray-50 p-5 whitespace-pre-line text-gray-700">
               {applicationPack.email.body}
             </div>
-
           </div>
-
         </section>
 
         {/* COVER LETTER */}
 
         <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
-
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-green-600">
@@ -221,20 +370,20 @@ export default function ResultPage() {
               }
               className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
-              {copied === "cover" ? "✓ Copied" : "Copy"}
+              {copied === "cover"
+                ? "✓ Copied"
+                : "Copy"}
             </button>
           </div>
 
           <div className="mt-6 rounded-2xl bg-gray-50 p-5 whitespace-pre-line text-gray-700">
             {applicationPack.coverLetter}
           </div>
-
         </section>
 
         {/* CV */}
 
         <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
-
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-green-600">
@@ -268,12 +417,13 @@ ${applicationPack.cv.availability}`,
               }
               className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
-              {copied === "cv" ? "✓ Copied" : "Copy CV"}
+              {copied === "cv"
+                ? "✓ Copied"
+                : "Copy CV"}
             </button>
           </div>
 
           <div className="mt-6 rounded-2xl bg-gray-50 p-6">
-
             <h3 className="text-xl font-bold text-gray-900">
               {applicationPack.cv.title}
             </h3>
@@ -317,19 +467,12 @@ ${applicationPack.cv.availability}`,
                 {applicationPack.cv.availability}
               </p>
             </div>
-
-            <div className="mt-6 rounded-xl bg-white p-4 text-sm text-gray-500">
-              {applicationPack.cv.note}
-            </div>
-
           </div>
-
         </section>
 
         {/* INTERVIEW */}
 
-        <section className="mb-8 rounded-3xl bg-white p-8 shadow-sm">
-
+        <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
           <div>
             <p className="text-sm font-semibold text-green-600">
               05
@@ -341,7 +484,6 @@ ${applicationPack.cv.availability}`,
           </div>
 
           <div className="mt-6 space-y-5">
-
             {applicationPack.interviewPrep.map(
               (item, index) => (
                 <div
@@ -358,32 +500,208 @@ ${applicationPack.cv.availability}`,
                 </div>
               )
             )}
-
           </div>
-
         </section>
 
-        {/* BUTTONS */}
+        {/* PRO ANALYSIS */}
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:justify-center">
+        {isPro && proAnalysis && (
+          <>
+            {/* MATCH SCORE */}
 
-          <a
+            <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
+              <p className="text-sm font-semibold text-green-600">
+                PRO ANALYSIS
+              </p>
+
+              <h2 className="mt-1 text-2xl font-bold text-gray-900">
+                Job Match Analysis 🎯
+              </h2>
+
+              <div className="mt-6 flex flex-col items-center rounded-2xl bg-gray-50 p-8">
+                <p className="text-sm font-semibold text-gray-500">
+                  MATCH SCORE
+                </p>
+
+                <p className="mt-2 text-6xl font-bold text-gray-900">
+                  {Math.round(proAnalysis.matchScore)}%
+                </p>
+
+                <p className="mt-3 max-w-xl text-center text-sm text-gray-500">
+                  This score is based on the information
+                  provided about the candidate and the job.
+                </p>
+              </div>
+            </section>
+
+            {/* REQUIREMENTS */}
+
+            <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
+              <h2 className="text-2xl font-bold text-gray-900">
+                Job requirements analysis
+              </h2>
+
+              <div className="mt-6 space-y-3">
+                {proAnalysis.requirements.map(
+                  (item, index) => (
+                    <div
+                      key={index}
+                      className="rounded-xl bg-gray-50 p-4 text-gray-700"
+                    >
+                      {item}
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+
+            {/* STRATEGY */}
+
+            <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
+              <h2 className="text-2xl font-bold text-gray-900">
+                Personalized application strategy
+              </h2>
+
+              <div className="mt-6 space-y-3">
+                {proAnalysis.strategy.map(
+                  (item, index) => (
+                    <div
+                      key={index}
+                      className="rounded-xl bg-gray-50 p-4 text-gray-700"
+                    >
+                      <span className="font-semibold">
+                        {index + 1}.
+                      </span>{" "}
+                      {item}
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+
+            {/* CHECKLIST */}
+
+            <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
+              <h2 className="text-2xl font-bold text-gray-900">
+                Application checklist
+              </h2>
+
+              <div className="mt-6 space-y-3">
+                {proAnalysis.checklist.map(
+                  (item, index) => (
+                    <div
+                      key={index}
+                      className="flex gap-3 rounded-xl bg-gray-50 p-4 text-gray-700"
+                    >
+                      <span>☐</span>
+                      <span>{item}</span>
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+
+            {/* QUALITY REPORT */}
+
+            <section className="mb-6 rounded-3xl bg-white p-8 shadow-sm">
+              <h2 className="text-2xl font-bold text-gray-900">
+                Application quality report
+              </h2>
+
+              <div className="mt-6 space-y-3">
+                {proAnalysis.qualityReport.map(
+                  (item, index) => (
+                    <div
+                      key={index}
+                      className="rounded-xl bg-gray-50 p-4 text-gray-700"
+                    >
+                      {item}
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+
+            {/* ADVANCED INTERVIEW */}
+
+            <section className="mb-8 rounded-3xl bg-white p-8 shadow-sm">
+              <h2 className="text-2xl font-bold text-gray-900">
+                Advanced interview preparation 🚀
+              </h2>
+
+              <div className="mt-6 space-y-5">
+                {proAnalysis.advancedInterviewPrep.map(
+                  (item, index) => (
+                    <div
+                      key={index}
+                      className="rounded-2xl bg-gray-50 p-5"
+                    >
+                      <p className="font-bold text-gray-900">
+                        {index + 1}. {item.question}
+                      </p>
+
+                      <div className="mt-4 space-y-3 text-gray-700">
+                        <p>
+                          <strong>
+                            How to answer:
+                          </strong>{" "}
+                          {item.howToAnswer}
+                        </p>
+
+                        <p>
+                          <strong>
+                            Mistake to avoid:
+                          </strong>{" "}
+                          {item.mistakeToAvoid}
+                        </p>
+
+                        <p>
+                          <strong>Example:</strong>{" "}
+                          {item.example}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* FOOTER BUTTONS */}
+
+        <div className="flex flex-col gap-4 pb-8 sm:flex-row sm:justify-center">
+          <Link
             href="/jobs"
             className="rounded-full border border-gray-300 bg-white px-7 py-3 text-center font-semibold text-gray-900 hover:bg-gray-50"
           >
             Find another job
-          </a>
+          </Link>
 
-          <a
-            href="/apply/form"
-            className="rounded-full bg-green-600 px-7 py-3 text-center font-semibold text-white hover:bg-green-700"
+          <Link
+            href="/dashboard"
+            className="rounded-full bg-black px-7 py-3 text-center font-semibold text-white hover:bg-gray-800"
           >
-            Create another application →
-          </a>
-
+            Go to dashboard →
+          </Link>
         </div>
-
       </div>
     </main>
+  );
+}
+
+export default function ResultPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-gray-50 px-6 py-12">
+          <div className="mx-auto max-w-4xl rounded-3xl bg-white p-10 text-center">
+            Loading...
+          </div>
+        </main>
+      }
+    >
+      <ResultContent />
+    </Suspense>
   );
 }

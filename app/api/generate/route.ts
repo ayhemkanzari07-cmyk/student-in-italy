@@ -1,95 +1,279 @@
+import { NextResponse } from "next/server";
 import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const applicationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    whatsapp: { type: "string" },
+    email: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        subject: { type: "string" },
+        body: { type: "string" },
+      },
+      required: ["subject", "body"],
+    },
+    coverLetter: { type: "string" },
+    interviewPrep: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          question: { type: "string" },
+          answer: { type: "string" },
+        },
+        required: ["question", "answer"],
+      },
+    },
+    cv: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        profile: { type: "string" },
+        experience: { type: "string" },
+        skills: { type: "string" },
+        availability: { type: "string" },
+      },
+      required: [
+        "title",
+        "profile",
+        "experience",
+        "skills",
+        "availability",
+      ],
+    },
+    proAnalysis: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        matchScore: { type: "number" },
+        requirements: {
+          type: "array",
+          items: { type: "string" },
+        },
+        strategy: {
+          type: "array",
+          items: { type: "string" },
+        },
+        checklist: {
+          type: "array",
+          items: { type: "string" },
+        },
+        qualityReport: {
+          type: "array",
+          items: { type: "string" },
+        },
+        advancedInterviewPrep: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              question: { type: "string" },
+              howToAnswer: { type: "string" },
+              mistakeToAvoid: { type: "string" },
+              example: { type: "string" },
+            },
+            required: [
+              "question",
+              "howToAnswer",
+              "mistakeToAvoid",
+              "example",
+            ],
+          },
+        },
+      },
+      required: [
+        "matchScore",
+        "requirements",
+        "strategy",
+        "checklist",
+        "qualityReport",
+        "advancedInterviewPrep",
+      ],
+    },
+  },
+  required: [
+    "whatsapp",
+    "email",
+    "coverLetter",
+    "interviewPrep",
+    "cv",
+    "proAnalysis",
+  ],
+} as const;
 
 export async function POST(request: Request) {
   try {
-    console.log("=== GENERATE API START ===");
-
-    const apiKey = process.env.OPENAI_API_KEY;
-
-    if (!apiKey) {
-      console.log("NO API KEY FOUND");
-
-      return Response.json(
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
         {
           success: false,
-          error: "OPENAI_API_KEY is missing",
+          error: "OpenAI API key is not configured.",
         },
         { status: 500 }
       );
     }
 
-    console.log("API KEY FOUND");
-
     const body = await request.json();
-
-    console.log("REQUEST RECEIVED");
 
     const {
       job,
-      city,
+      company,
+      location,
+      description,
+      name,
       italianLevel,
       experience,
-      jobOffer,
+      skills,
+      availability,
+      cvName,
+      packageType = "basic",
     } = body;
 
-    const client = new OpenAI({
-      apiKey: apiKey,
-    });
+    if (
+      !job ||
+      !name ||
+      !italianLevel ||
+      !experience ||
+      !skills ||
+      !availability
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Please complete all required fields.",
+        },
+        { status: 400 }
+      );
+    }
 
-    console.log("CALLING OPENAI...");
+    const isPro =
+      packageType === "pro" || packageType === "monthly";
 
-    const response = await client.responses.create({
-      model: "gpt-5-mini",
-      input: `
-You are an Italian job application assistant.
+    const prompt = `
+You are the AI application specialist for StudentInItaly.
 
-Create a professional application pack for a foreign student applying for a job in Italy.
+Your task is to create a professional Italian job application pack for an international student applying for a real job in Italy.
 
-Candidate:
-Job: ${job}
-City: ${city}
+IMPORTANT RULES:
+- Never invent qualifications, jobs, degrees, certificates, skills or experience.
+- Use only the candidate information provided.
+- Improve wording and presentation, but do not fabricate facts.
+- Write natural, professional Italian.
+- Keep the application realistic for the Italian job market.
+- Do not mention that AI was used.
+- Do not promise employment.
+- If information is missing, work with what is available.
+- The candidate may have limited Italian proficiency, so keep language natural and appropriate.
+
+CANDIDATE:
+Name: ${name}
 Italian level: ${italianLevel}
-Experience: ${experience}
+Experience:
+${experience}
 
-Job offer:
-${jobOffer}
+Skills:
+${skills}
 
-Create exactly these 3 sections:
+Availability:
+${availability}
 
-1. WHATSAPP MESSAGE
-A short natural Italian WhatsApp message to the employer.
+CV file:
+${cvName || "No CV uploaded"}
 
-2. EMAIL
-A professional Italian application email with a subject line.
+JOB:
+Position: ${job}
+Company: ${company || "Not specified"}
+Location: ${location || "Not specified"}
 
-3. COVER LETTER
-A professional Italian cover letter adapted to the candidate.
+Job description:
+${description || "No detailed job description available."}
 
-Important:
-- Write everything in Italian.
-- Do not invent qualifications or experience.
-- Keep the language natural and appropriate for a foreign student.
-      `,
+PACKAGE:
+${isPro ? "PRO / MONTHLY — generate all advanced analysis." : "BASIC — generate the standard application pack."}
+
+For the standard application:
+1. WhatsApp message
+2. Professional application email
+3. Customized cover letter
+4. Basic interview preparation
+5. CV profile/adaptation content
+
+For Pro/Monthly:
+Also provide:
+1. Match score from 0 to 100 based only on the candidate information and job description.
+2. Job requirements analysis.
+3. Personalized application strategy.
+4. Application checklist.
+5. Application quality report.
+6. Advanced interview preparation with how to answer, mistakes to avoid and examples.
+
+Do NOT provide a Missing Skills Analysis.
+Do NOT invent missing qualifications.
+`;
+
+    const response = await openai.responses.create({
+      model: "gpt-5.6-luna",
+      store: false,
+      input: prompt,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "student_in_italy_application",
+          strict: true,
+          schema: applicationSchema,
+        },
+      },
     });
 
-    console.log("OPENAI RESPONSE RECEIVED");
+    if (!response.output_text) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "OpenAI returned an empty response.",
+        },
+        { status: 502 }
+      );
+    }
 
-    return Response.json({
+    const applicationPack = JSON.parse(response.output_text);
+
+    if (!isPro) {
+      applicationPack.proAnalysis = {
+        matchScore: 0,
+        requirements: [],
+        strategy: [],
+        checklist: [],
+        qualityReport: [],
+        advancedInterviewPrep: [],
+      };
+    }
+
+    return NextResponse.json({
       success: true,
-      result: response.output_text,
+      applicationPack,
     });
-
   } catch (error) {
-    console.error("=== GENERATE API ERROR ===");
-    console.error(error);
+    console.error("OPENAI GENERATION ERROR:", error);
 
-    return Response.json(
+    const message =
+      error instanceof Error
+        ? error.message
+        : "AI generation failed.";
+
+    return NextResponse.json(
       {
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown server error",
+        error: message,
       },
       { status: 500 }
     );

@@ -1,11 +1,205 @@
+import { NextResponse } from "next/server";
+import OpenAI from "openai";
+import { createClient } from "@/utils/supabase/server";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const applicationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    whatsapp: {
+      type: "string",
+    },
+
+    email: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        subject: {
+          type: "string",
+        },
+        body: {
+          type: "string",
+        },
+      },
+      required: ["subject", "body"],
+    },
+
+    coverLetter: {
+      type: "string",
+    },
+
+    interviewPrep: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          question: {
+            type: "string",
+          },
+          answer: {
+            type: "string",
+          },
+        },
+        required: ["question", "answer"],
+      },
+    },
+
+    cv: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: {
+          type: "string",
+        },
+        profile: {
+          type: "string",
+        },
+        experience: {
+          type: "string",
+        },
+        skills: {
+          type: "string",
+        },
+        availability: {
+          type: "string",
+        },
+      },
+      required: [
+        "title",
+        "profile",
+        "experience",
+        "skills",
+        "availability",
+      ],
+    },
+
+    proAnalysis: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        matchScore: {
+          type: "number",
+        },
+
+        requirements: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+
+        strategy: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+
+        checklist: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+
+        qualityReport: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+
+        advancedInterviewPrep: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              question: {
+                type: "string",
+              },
+              howToAnswer: {
+                type: "string",
+              },
+              mistakeToAvoid: {
+                type: "string",
+              },
+              example: {
+                type: "string",
+              },
+            },
+            required: [
+              "question",
+              "howToAnswer",
+              "mistakeToAvoid",
+              "example",
+            ],
+          },
+        },
+      },
+
+      required: [
+        "matchScore",
+        "requirements",
+        "strategy",
+        "checklist",
+        "qualityReport",
+        "advancedInterviewPrep",
+      ],
+    },
+  },
+
+  required: [
+    "whatsapp",
+    "email",
+    "coverLetter",
+    "interviewPrep",
+    "cv",
+    "proAnalysis",
+  ],
+} as const;
+
 export async function POST(request: Request) {
+  let createdApplicationId: string | null = null;
+
   try {
+    // --------------------------------------------------
+    // 1. SUPABASE / AUTH
+    // --------------------------------------------------
+
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "You must be logged in.",
+        },
+        { status: 401 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 2. READ REQUEST
+    // --------------------------------------------------
+
     const body = await request.json();
 
     const {
+      jobId,
       job,
       company,
       location,
+      jobUrl,
       description,
       name,
       italianLevel,
@@ -13,10 +207,22 @@ export async function POST(request: Request) {
       skills,
       availability,
       cvName,
+      packageType,
     } = body;
 
-    if (!name || !job || !italianLevel || !experience || !skills || !availability) {
-      return Response.json(
+    // --------------------------------------------------
+    // 3. VALIDATION
+    // --------------------------------------------------
+
+    if (
+      !job ||
+      !name ||
+      !italianLevel ||
+      !experience ||
+      !skills ||
+      !availability
+    ) {
+      return NextResponse.json(
         {
           success: false,
           error: "Please complete all required fields.",
@@ -25,124 +231,391 @@ export async function POST(request: Request) {
       );
     }
 
-    console.log("=== APPLICATION RECEIVED ===");
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "OpenAI API key is not configured.",
+        },
+        { status: 500 }
+      );
+    }
 
-    console.log({
-      job,
-      company,
-      location,
-      description,
-      name,
-      italianLevel,
-      experience,
-      skills,
-      availability,
-      cvName,
+    // --------------------------------------------------
+    // 4. GET PROFILE
+    // --------------------------------------------------
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Your profile could not be found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 5. CHECK CREDITS
+    // --------------------------------------------------
+
+    if (profile.credits < 1) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "You don't have any application credits left.",
+          code: "NO_CREDITS",
+        },
+        { status: 402 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 6. PACKAGE
+    // --------------------------------------------------
+
+    const allowedPackages = [
+      "basic",
+      "pro",
+      "monthly",
+    ];
+
+    const requestedPackage =
+      packageType || profile.package_type;
+
+    const finalPackage = allowedPackages.includes(
+      requestedPackage
+    )
+      ? requestedPackage
+      : "basic";
+
+    const isPro =
+      finalPackage === "pro" ||
+      finalPackage === "monthly";
+
+    // --------------------------------------------------
+    // 7. BUILD AI PROMPT
+    // --------------------------------------------------
+
+    const prompt = `
+You are the professional AI application specialist for StudentInItaly.
+
+Create a professional job application package for a candidate applying to a real job in Italy.
+
+IMPORTANT RULES:
+
+- Never invent qualifications.
+- Never invent work experience.
+- Never invent degrees.
+- Never invent certificates.
+- Never invent languages.
+- Never invent skills.
+- Use only information provided by the candidate.
+- You may improve wording and structure.
+- Write natural professional Italian.
+- Make the application specific to the job.
+- Do not mention that AI was used.
+- Do not make false claims.
+- Do not promise that the candidate will get the job.
+
+CANDIDATE
+
+Name:
+${name}
+
+Italian level:
+${italianLevel}
+
+Experience:
+${experience}
+
+Skills:
+${skills}
+
+Availability:
+${availability}
+
+Existing CV:
+${cvName || "No CV uploaded"}
+
+JOB
+
+Position:
+${job}
+
+Company:
+${company || "Not specified"}
+
+Location:
+${location || "Not specified"}
+
+Job URL:
+${jobUrl || "Not available"}
+
+Job description:
+${description || "No detailed job description available"}
+
+PACKAGE
+
+${isPro ? "PRO / MONTHLY PACKAGE" : "BASIC PACKAGE"}
+
+BASIC PACKAGE MUST INCLUDE:
+
+1. Professional WhatsApp application message.
+2. Professional application email.
+3. Customized Italian cover letter.
+4. Basic interview preparation.
+5. CV profile/adaptation content.
+
+PRO / MONTHLY MUST ALSO INCLUDE:
+
+1. Job Match Score from 0 to 100.
+2. Job requirements analysis.
+3. Personalized application strategy.
+4. Application checklist.
+5. Application quality report.
+6. Advanced interview preparation.
+
+IMPORTANT:
+
+Do NOT create a Missing Skills Analysis.
+
+The Match Score must be based only on the information supplied by the candidate and the job description.
+
+If the job description is incomplete, make that limitation clear in the analysis.
+
+For the CV section, create professional text that can later be converted into a clean DOCX CV.
+
+Use professional Italian suitable for an Italian employer.
+`;
+
+    // --------------------------------------------------
+    // 8. CALL OPENAI
+    // --------------------------------------------------
+
+    const response = await openai.responses.create({
+      model: "gpt-5.6-luna",
+      store: false,
+
+      input: prompt,
+
+      text: {
+        format: {
+          type: "json_schema",
+          name: "student_in_italy_application",
+          strict: true,
+          schema: applicationSchema,
+        },
+      },
     });
 
-    const applicationPack = {
-      whatsapp: `Buongiorno, sono ${name}. Sono interessato/a alla posizione di ${job}${
-        company ? ` presso ${company}` : ""
-      }. Ho un livello di italiano ${italianLevel} e sono disponibile ${availability}. Mi piacerebbe avere l'opportunità di presentarmi e parlare della posizione. Grazie!`,
-
-      email: {
-        subject: `Candidatura per la posizione di ${job}`,
-        body: `Gentile ${company || "Responsabile HR"},
-
-mi chiamo ${name} e desidero candidarmi per la posizione di ${job}${
-          location ? ` a ${location}` : ""
-        }.
-
-Ho un livello di italiano ${italianLevel} e ho maturato la seguente esperienza:
-
-${experience}
-
-Tra le mie principali competenze ci sono:
-
-${skills}
-
-Sono disponibile ${availability} e sarei molto interessato/a a entrare a far parte della vostra realtà.
-
-Resto a disposizione per un eventuale colloquio e per fornire ulteriori informazioni.
-
-Cordiali saluti,
-${name}`,
-      },
-
-      coverLetter: `Gentile Responsabile,
-
-mi chiamo ${name} e sono interessato/a alla posizione di ${job}${
-        company ? ` presso ${company}` : ""
-      }.
-
-Sono una persona motivata, seria e disponibile a imparare. Il mio livello di italiano è ${italianLevel} e la mia esperienza comprende:
-
-${experience}
-
-Ho inoltre sviluppato competenze in:
-
-${skills}
-
-Sono disponibile ${availability} e sarei felice di poter mettere le mie capacità a disposizione della vostra azienda.
-
-Sono disponibile per un colloquio conoscitivo durante il quale potrò presentarmi meglio e parlare delle mie motivazioni.
-
-Grazie per l'attenzione.
-
-Cordiali saluti,
-${name}`,
-
-      interviewPrep: [
+    if (!response.output_text) {
+      return NextResponse.json(
         {
-          question: "Puoi presentarti?",
-          answer: `Mi chiamo ${name}. Sono una persona motivata e responsabile. Ho esperienza in diversi ambiti e ho sviluppato competenze come ${skills}. Attualmente sto cercando un'opportunità come ${job} e sono disponibile ${availability}.`,
+          success: false,
+          error: "The AI returned an empty response.",
         },
+        { status: 502 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 9. PARSE AI RESULT
+    // --------------------------------------------------
+
+    let applicationPack;
+
+    try {
+      applicationPack = JSON.parse(
+        response.output_text
+      );
+    } catch (parseError) {
+      console.error(
+        "OPENAI JSON PARSE ERROR:",
+        parseError
+      );
+
+      return NextResponse.json(
         {
-          question: "Perché vuoi lavorare con noi?",
-          answer: `Sono interessato/a a questa posizione perché penso che sia una buona opportunità per mettere in pratica le mie competenze, imparare cose nuove e crescere professionalmente.`,
+          success: false,
+          error:
+            "The AI returned an invalid application format.",
         },
+        { status: 502 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 10. BASIC USERS DON'T GET PRO ANALYSIS
+    // --------------------------------------------------
+
+    if (!isPro) {
+      applicationPack.proAnalysis = {
+        matchScore: 0,
+        requirements: [],
+        strategy: [],
+        checklist: [],
+        qualityReport: [],
+        advancedInterviewPrep: [],
+      };
+    }
+
+    // --------------------------------------------------
+    // 11. SAVE APPLICATION
+    // --------------------------------------------------
+
+    const { data: application, error: applicationError } =
+      await supabase
+        .from("applications")
+        .insert({
+          user_id: user.id,
+          job_id: jobId ? String(jobId) : null,
+          job_title: job,
+          company: company || null,
+          location: location || null,
+          job_url: jobUrl || null,
+          job_description: description || null,
+          package_type: finalPackage,
+          credit_used: 1,
+          content: applicationPack,
+          status: "completed",
+        })
+        .select()
+        .single();
+
+    if (applicationError || !application) {
+      console.error(
+        "APPLICATION INSERT ERROR:",
+        applicationError
+      );
+
+      return NextResponse.json(
         {
-          question: "Quali sono i tuoi punti di forza?",
-          answer: `I miei principali punti di forza sono la motivazione, la capacità di imparare velocemente e la disponibilità a lavorare in squadra.`,
+          success: false,
+          error: "Could not save your application.",
         },
+        { status: 500 }
+      );
+    }
+
+    createdApplicationId = application.id;
+
+    // --------------------------------------------------
+    // 12. DEDUCT ONE CREDIT SAFELY
+    // --------------------------------------------------
+
+    /*
+      We update only if the credits value is still the
+      same value that we originally read.
+
+      This prevents two simultaneous requests from both
+      successfully spending the same credit.
+    */
+
+    const expectedCredits = profile.credits;
+    const newCredits = expectedCredits - 1;
+
+    const {
+      data: updatedProfile,
+      error: creditError,
+    } = await supabase
+      .from("profiles")
+      .update({
+        credits: newCredits,
+      })
+      .eq("id", user.id)
+      .eq("credits", expectedCredits)
+      .select("credits")
+      .single();
+
+    if (
+      creditError ||
+      !updatedProfile
+    ) {
+      console.error(
+        "CREDIT UPDATE ERROR:",
+        creditError
+      );
+
+      // Remove the application if the credit could not
+      // be safely consumed.
+      await supabase
+        .from("applications")
+        .delete()
+        .eq("id", createdApplicationId)
+        .eq("user_id", user.id);
+
+      return NextResponse.json(
         {
-          question: "Qual è il tuo livello di italiano?",
-          answer: `Il mio livello di italiano è ${italianLevel}. Sto continuando a migliorare la lingua e sono motivato/a a utilizzarla quotidianamente anche nell'ambiente di lavoro.`,
+          success: false,
+          error:
+            "Your application was not charged because your credit could not be reserved. Please try again.",
         },
-      ],
+        { status: 409 }
+      );
+    }
 
-      cv: {
-        title: `${name} — CV`,
-        profile: `Persona motivata e responsabile interessata alla posizione di ${job}. Livello di italiano: ${italianLevel}. Disponibile ${availability}.`,
+    // --------------------------------------------------
+    // 13. SUCCESS
+    // --------------------------------------------------
 
-        experience: experience,
-
-        skills: skills,
-
-        availability: availability,
-
-        note: cvName
-          ? `CV caricato: ${cvName}`
-          : "Nessun CV caricato. Il CV può essere creato automaticamente dai dati forniti.",
-      },
-    };
-
-    return Response.json({
+    return NextResponse.json({
       success: true,
-      mock: true,
-      message: "Application pack generated successfully.",
+
+      applicationId: application.id,
+
+      creditsRemaining:
+        updatedProfile.credits,
+
+      packageType: finalPackage,
+
+      message:
+        "Your application was prepared successfully.",
+
       applicationPack,
     });
   } catch (error) {
-    console.error("APPLICATION API ERROR:", error);
+    console.error(
+      "APPLICATION API ERROR:",
+      error
+    );
 
-    return Response.json(
+    /*
+      If something unexpected happens after an application
+      was created, try to remove it so we don't leave
+      incomplete application data behind.
+    */
+
+    if (createdApplicationId) {
+      try {
+        const supabase = await createClient();
+
+        await supabase
+          .from("applications")
+          .delete()
+          .eq("id", createdApplicationId);
+      } catch (cleanupError) {
+        console.error(
+          "APPLICATION CLEANUP ERROR:",
+          cleanupError
+        );
+      }
+    }
+
+    return NextResponse.json(
       {
         success: false,
         error:
           error instanceof Error
             ? error.message
-            : "Something went wrong.",
+            : "Something went wrong while preparing your application.",
       },
       { status: 500 }
     );

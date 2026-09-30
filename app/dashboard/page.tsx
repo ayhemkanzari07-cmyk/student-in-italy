@@ -1,187 +1,474 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/utils/supabase/server";
+import { createClient } from "@/utils/supabase/client";
 
-export default async function DashboardPage() {
-  const supabase = await createClient();
+type Profile = {
+  full_name: string | null;
+  phone: string | null;
+  italian_level: string | null;
+  experience: string | null;
+  skills: string | null;
+  availability: string | null;
+  package_type: string;
+  credits: number;
+};
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+type CV = {
+  id: string;
+  file_name: string;
+  file_type: string;
+  created_at: string;
+};
 
-  if (!user) {
-    redirect("/login");
+type Application = {
+  id: string;
+  job_title: string;
+  company: string;
+  location: string;
+  package_type: string;
+  status: string;
+  created_at: string;
+};
+
+export default function DashboardPage() {
+  const supabase = createClient();
+
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [email, setEmail] = useState("");
+  const [cvs, setCvs] = useState<CV[]>([]);
+  const [applications, setApplications] = useState<Application[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function loadDashboard() {
+    setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.location.href = "/login";
+      return;
+    }
+
+    setEmail(user.email ?? "");
+
+    const [profileResponse, cvsResponse] = await Promise.all([
+      fetch("/api/profile"),
+      fetch("/api/cvs"),
+    ]);
+
+    const profileData = await profileResponse.json();
+    const cvsData = await cvsResponse.json();
+
+    if (profileData.profile) {
+      setProfile(profileData.profile);
+    }
+
+    if (cvsData.cvs) {
+      setCvs(cvsData.cvs);
+    }
+
+    const { data: applicationData } = await supabase
+      .from("applications")
+      .select(
+        "id, job_title, company, location, package_type, status, created_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    setApplications(applicationData ?? []);
+    setLoading(false);
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
+  useEffect(() => {
+    loadDashboard();
+  }, []);
 
-  const { data: applications } = await supabase
-    .from("applications")
-    .select(
-      "id, job_title, company, location, package_type, status, created_at"
-    )
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(10);
+  async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-  const displayName =
-    profile?.full_name ||
-    user.user_metadata?.full_name ||
-    user.email?.split("@")[0] ||
-    "Student";
+    if (!profile) return;
+
+    setSaving(true);
+    setMessage("");
+
+    const response = await fetch("/api/profile", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(profile),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setMessage(data.error || "Could not save profile.");
+    } else {
+      setProfile(data.profile);
+      setMessage("Profile saved successfully.");
+    }
+
+    setSaving(false);
+  }
+
+  async function uploadCV(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    setUploading(true);
+    setMessage("");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/cvs", {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setMessage(data.error || "Could not upload CV.");
+    } else {
+      setCvs((current) => [data.cv, ...current]);
+      setMessage("CV uploaded successfully.");
+    }
+
+    event.target.value = "";
+    setUploading(false);
+  }
+
+  async function deleteCV(id: string) {
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this CV?"
+    );
+
+    if (!confirmed) return;
+
+    setMessage("");
+
+    const response = await fetch(`/api/cvs?id=${id}`, {
+      method: "DELETE",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setMessage(data.error || "Could not delete CV.");
+      return;
+    }
+
+    setCvs((current) => current.filter((cv) => cv.id !== id));
+    setMessage("CV deleted successfully.");
+  }
+
+  async function logout() {
+    await fetch("/auth/signout", {
+      method: "POST",
+    });
+
+    window.location.href = "/login";
+  }
+
+  if (loading || !profile) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">Loading dashboard...</p>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-gray-50">
-      <nav className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-          <Link href="/" className="text-2xl font-bold text-gray-900">
-            Student<span className="text-green-600">InItaly</span>
+      <header className="border-b bg-white">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link href="/" className="text-2xl font-bold">
+            StudentInItaly
           </Link>
 
-          <form action="/auth/signout" method="post">
+          <div className="flex items-center gap-4">
+            <Link
+              href="/jobs"
+              className="text-gray-600 hover:text-black"
+            >
+              Find Jobs
+            </Link>
+
+            <button
+              onClick={logout}
+              className="rounded-lg border px-4 py-2 hover:bg-gray-50"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-6xl mx-auto px-6 py-10">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold">
+            Welcome, {profile.full_name || "Student"} 👋
+          </h1>
+          <p className="text-gray-600 mt-2">{email}</p>
+        </div>
+
+        {message && (
+          <div className="mb-6 rounded-lg border bg-white px-4 py-3">
+            {message}
+          </div>
+        )}
+
+        <div className="grid md:grid-cols-3 gap-5 mb-8">
+          <div className="bg-white rounded-2xl border p-6">
+            <p className="text-sm text-gray-500">Available Credits</p>
+            <p className="text-4xl font-bold mt-2">
+              {profile.credits}
+            </p>
+            <Link
+              href="/pricing"
+              className="inline-block mt-4 text-sm font-medium underline"
+            >
+              Buy more applications
+            </Link>
+          </div>
+
+          <div className="bg-white rounded-2xl border p-6">
+            <p className="text-sm text-gray-500">Current Package</p>
+            <p className="text-2xl font-bold mt-2 capitalize">
+              {profile.package_type}
+            </p>
+          </div>
+
+          <div className="bg-white rounded-2xl border p-6">
+            <p className="text-sm text-gray-500">CVs</p>
+            <p className="text-4xl font-bold mt-2">
+              {cvs.length}/2
+            </p>
+          </div>
+        </div>
+
+        <section className="bg-white rounded-2xl border p-6 mb-8">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-xl font-bold">My CVs</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Upload up to 2 CVs in PDF, DOC or DOCX format.
+              </p>
+            </div>
+
+            <label
+              className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-medium ${
+                cvs.length >= 2 || uploading
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                  : "bg-black text-white"
+              }`}
+            >
+              {uploading ? "Uploading..." : "Upload CV"}
+
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx"
+                className="hidden"
+                disabled={cvs.length >= 2 || uploading}
+                onChange={uploadCV}
+              />
+            </label>
+          </div>
+
+          {cvs.length === 0 ? (
+            <div className="rounded-xl border border-dashed p-8 text-center text-gray-500">
+              No CV uploaded yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {cvs.map((cv) => (
+                <div
+                  key={cv.id}
+                  className="flex items-center justify-between rounded-xl border p-4"
+                >
+                  <div>
+                    <p className="font-medium">{cv.file_name}</p>
+                    <p className="text-sm text-gray-500 uppercase mt-1">
+                      {cv.file_type}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => deleteCV(cv.id)}
+                    className="text-sm text-red-600 hover:underline"
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="bg-white rounded-2xl border p-6 mb-8">
+          <h2 className="text-xl font-bold mb-6">My Profile</h2>
+
+          <form onSubmit={saveProfile} className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Full Name
+              </label>
+              <input
+                value={profile.full_name ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    full_name: e.target.value,
+                  })
+                }
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Phone
+              </label>
+              <input
+                value={profile.phone ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    phone: e.target.value,
+                  })
+                }
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Italian Level
+              </label>
+              <input
+                value={profile.italian_level ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    italian_level: e.target.value,
+                  })
+                }
+                placeholder="A2, B1, B2..."
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Experience
+              </label>
+              <textarea
+                value={profile.experience ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    experience: e.target.value,
+                  })
+                }
+                rows={4}
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Skills
+              </label>
+              <textarea
+                value={profile.skills ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    skills: e.target.value,
+                  })
+                }
+                rows={4}
+                placeholder="Excel, Photoshop, Customer Service..."
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Availability
+              </label>
+              <input
+                value={profile.availability ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    availability: e.target.value,
+                  })
+                }
+                placeholder="Full-time, Part-time, Weekends..."
+                className="w-full rounded-lg border px-4 py-3"
+              />
+            </div>
+
             <button
               type="submit"
-              className="rounded-full border border-gray-300 px-5 py-2.5 font-semibold text-gray-700 hover:bg-gray-50"
+              disabled={saving}
+              className="rounded-lg bg-black text-white px-6 py-3 font-medium disabled:opacity-50"
             >
-              Log out
+              {saving ? "Saving..." : "Save Profile"}
             </button>
           </form>
-        </div>
-      </nav>
+        </section>
 
-      <section className="px-6 py-12">
-        <div className="mx-auto max-w-7xl">
-          <p className="text-sm font-semibold uppercase tracking-wide text-green-600">
-            Dashboard
-          </p>
+        <section className="bg-white rounded-2xl border p-6">
+          <h2 className="text-xl font-bold mb-6">
+            Application History
+          </h2>
 
-          <h1 className="mt-2 text-4xl font-bold text-gray-900">
-            Welcome, {displayName} 👋
-          </h1>
-
-          <p className="mt-2 text-gray-600">
-            Manage your applications and account.
-          </p>
-
-          <div className="mt-10 grid gap-5 md:grid-cols-3">
-            <div className="rounded-2xl bg-white p-6 shadow-sm">
-              <p className="text-sm text-gray-500">Available credits</p>
-              <p className="mt-2 text-4xl font-bold text-gray-900">
-                {profile?.credits ?? 0}
-              </p>
-              <p className="mt-2 text-sm text-gray-500">
-                Applications remaining
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-6 shadow-sm">
-              <p className="text-sm text-gray-500">Current package</p>
-              <p className="mt-2 text-2xl font-bold capitalize text-gray-900">
-                {profile?.package_type || "None"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-green-600 p-6 text-white shadow-sm">
-              <p className="text-sm text-green-100">
-                Need more applications?
-              </p>
-
-              <p className="mt-2 text-2xl font-bold">
-                Choose a package
-              </p>
-
-              <Link
-                href="/pricing"
-                className="mt-4 inline-block rounded-full bg-white px-5 py-2.5 font-semibold text-green-700"
-              >
-                View packages
-              </Link>
-            </div>
-          </div>
-
-          <div className="mt-10 rounded-3xl bg-white p-8 shadow-sm">
-            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Your applications
-                </h2>
-                <p className="mt-1 text-gray-600">
-                  Your recent application history.
-                </p>
-              </div>
-
-              <Link
-                href="/jobs"
-                className="rounded-full bg-green-600 px-5 py-3 text-center font-semibold text-white hover:bg-green-700"
-              >
-                Find a job →
-              </Link>
-            </div>
-
-            <div className="mt-8">
-              {!applications || applications.length === 0 ? (
-                <div className="rounded-2xl bg-gray-50 p-8 text-center">
-                  <p className="font-semibold text-gray-900">
-                    No applications yet
-                  </p>
-                  <p className="mt-2 text-gray-600">
-                    Find a job and create your first application.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {applications.map((application) => (
-                    <div
-                      key={application.id}
-                      className="rounded-2xl border border-gray-200 p-5"
-                    >
-                      <div className="flex flex-col justify-between gap-4 md:flex-row">
-                        <div>
-                          <h3 className="font-bold text-gray-900">
-                            {application.job_title}
-                          </h3>
-
-                          {application.company && (
-                            <p className="mt-1 text-gray-600">
-                              {application.company}
-                            </p>
-                          )}
-
-                          {application.location && (
-                            <p className="mt-1 text-sm text-gray-500">
-                              📍 {application.location}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="text-sm text-gray-500">
-                          {new Date(
-                            application.created_at
-                          ).toLocaleDateString("en-GB")}
-                        </div>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold capitalize text-gray-700">
-                          {application.package_type}
-                        </span>
-
-                        <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold capitalize text-green-700">
-                          {application.status}
-                        </span>
-                      </div>
+          {applications.length === 0 ? (
+            <p className="text-gray-500">
+              You haven't created any applications yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {applications.map((application) => (
+                <div
+                  key={application.id}
+                  className="rounded-xl border p-4"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="font-semibold">
+                        {application.job_title}
+                      </p>
+                      <p className="text-gray-600">
+                        {application.company}
+                      </p>
+                      <p className="text-sm text-gray-500 mt-1">
+                        {application.location}
+                      </p>
                     </div>
-                  ))}
+
+                    <span className="text-sm capitalize">
+                      {application.status}
+                    </span>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
-          </div>
-        </div>
-      </section>
+          )}
+        </section>
+      </div>
     </main>
   );
 }
