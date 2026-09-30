@@ -9,6 +9,7 @@ function ApplicationForm() {
   const job = searchParams.get("job") || "";
   const company = searchParams.get("company") || "";
   const location = searchParams.get("location") || "";
+  const description = searchParams.get("description") || "";
 
   const [name, setName] = useState("");
   const [italianLevel, setItalianLevel] = useState("");
@@ -17,22 +18,51 @@ function ApplicationForm() {
   const [availability, setAvailability] = useState("");
   const [cv, setCv] = useState<File | null>(null);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    console.log({
-      job,
-      company,
-      location,
-      name,
-      italianLevel,
-      experience,
-      skills,
-      availability,
-      cv,
-    });
+    setLoading(true);
+    setMessage("");
 
-    alert("Application information saved!");
+    try {
+      const response = await fetch("/api/application", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          job,
+          company,
+          location,
+          description,
+          name,
+          italianLevel,
+          experience,
+          skills,
+          availability,
+          cvName: cv?.name || null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Something went wrong");
+      }
+
+      setMessage(data.message);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -57,8 +87,7 @@ function ApplicationForm() {
           </h1>
 
           <p className="mt-2 text-gray-600">
-            Give us your information and we will prepare your application
-            for this job.
+            We will use your information to prepare your application.
           </p>
 
           <div className="mt-8 rounded-2xl bg-gray-50 p-5">
@@ -207,15 +236,23 @@ function ApplicationForm() {
               />
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
-              className="w-full rounded-full bg-green-600 py-4 font-semibold text-white transition hover:bg-green-700"
+              disabled={loading}
+              className="w-full rounded-full bg-green-600 py-4 font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Prepare my application →
+              {loading
+                ? "Preparing..."
+                : "Prepare my application →"}
             </button>
 
           </form>
+
+          {message && (
+            <div className="mt-6 rounded-2xl bg-green-50 p-5 text-green-700">
+              {message}
+            </div>
+          )}
 
         </div>
 
