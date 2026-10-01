@@ -3,7 +3,6 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/utils/supabase/client";
 
 type InterviewQuestion = {
   question: string;
@@ -61,7 +60,7 @@ type Application = {
 
 function ResultContent() {
   const searchParams = useSearchParams();
-  const applicationId = searchParams.get("id");
+  const queryApplicationId = searchParams.get("id");
 
   const [application, setApplication] =
     useState<Application | null>(null);
@@ -70,66 +69,81 @@ function ResultContent() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
 
-  const supabase = createClient();
-
   useEffect(() => {
     async function loadApplication() {
+      /*
+       * The normal path uses ?id=...
+       * We also keep a fallback to sessionStorage because the
+       * form already saves applicationId there before redirecting.
+       */
+      const storedApplicationId =
+        sessionStorage.getItem("applicationId");
+
+      const applicationId =
+        queryApplicationId || storedApplicationId;
+
       if (!applicationId) {
-        setError("No application was specified.");
+        setError("No application ID was provided.");
         setLoading(false);
         return;
       }
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        window.location.href = `/login?redirect=${encodeURIComponent(
-          `/apply/result?id=${applicationId}`
-        )}`;
-        return;
+      /*
+       * If the URL arrived without ?id=..., repair the URL so
+       * refresh/back/forward navigation keeps the application ID.
+       */
+      if (!queryApplicationId) {
+        window.history.replaceState(
+          null,
+          "",
+          `/apply/result?id=${encodeURIComponent(applicationId)}`
+        );
       }
 
-      const { data, error: applicationError } =
-        await supabase
-          .from("applications")
-          .select(
-            "id, job_title, company, location, package_type, status, content, created_at, expires_at"
-          )
-          .eq("id", applicationId)
-          .eq("user_id", user.id)
-          .single();
-
-      if (applicationError || !data) {
-        console.error(
-          "APPLICATION LOAD ERROR:",
-          applicationError
+      try {
+        const response = await fetch(
+          `/api/application?id=${encodeURIComponent(applicationId)}`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
         );
+
+        const data = await response.json();
+
+        if (response.status === 401) {
+          window.location.href = `/login?redirect=${encodeURIComponent(
+            `/apply/result?id=${applicationId}`
+          )}`;
+          return;
+        }
+
+        if (!response.ok || !data.success || !data.application) {
+          console.error("APPLICATION LOAD ERROR:", data);
+
+          setError(
+            data.error ||
+              "This application could not be found or is no longer available."
+          );
+
+          setLoading(false);
+          return;
+        }
+
+        setApplication(data.application as Application);
+      } catch (error) {
+        console.error("APPLICATION LOAD ERROR:", error);
 
         setError(
-          "This application could not be found or is no longer available."
+          "We couldn't load your application. Please try again."
         );
-
+      } finally {
         setLoading(false);
-        return;
       }
-
-      if (data.status === "expired") {
-        setError(
-          "This application has expired and is no longer available."
-        );
-
-        setLoading(false);
-        return;
-      }
-
-      setApplication(data as Application);
-      setLoading(false);
     }
 
     loadApplication();
-  }, [applicationId]);
+  }, [queryApplicationId]);
 
   async function copyText(
     text: string,

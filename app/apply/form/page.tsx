@@ -31,7 +31,7 @@ function ApplicationForm() {
   const company = searchParams.get("company") || "";
   const location = searchParams.get("location") || "";
   const description = searchParams.get("description") || "";
-  const jobUrl = searchParams.get("jobUrl") || "";
+  const jobUrl = searchParams.get("jobUrl") || searchParams.get("url") || "";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [cvs, setCvs] = useState<CV[]>([]);
