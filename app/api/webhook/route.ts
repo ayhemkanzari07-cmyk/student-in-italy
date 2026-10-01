@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     /*
      * =====================================================
@@ -91,12 +91,6 @@ export async function POST(request: Request) {
 
       /*
        * Process the purchase atomically inside PostgreSQL.
-       *
-       * This handles:
-       * - pending purchase → paid
-       * - credits addition
-       * - Stripe event id
-       * - duplicate protection
        */
 
       const { data, error } = await supabase.rpc(
@@ -203,11 +197,6 @@ export async function POST(request: Request) {
 
       /*
        * Process the monthly payment atomically.
-       *
-       * This handles:
-       * - +9 credits
-       * - purchase record
-       * - duplicate Stripe event protection
        */
 
       const { data, error } = await supabase.rpc(
@@ -235,7 +224,10 @@ export async function POST(request: Request) {
         );
 
         return NextResponse.json(
-          { error: "Monthly payment processing failed." },
+          {
+            error:
+              "Monthly payment processing failed.",
+          },
           { status: 500 }
         );
       }
@@ -290,7 +282,10 @@ export async function POST(request: Request) {
         );
 
         return NextResponse.json(
-          { error: "Subscription update failed." },
+          {
+            error:
+              "Subscription update failed.",
+          },
           { status: 500 }
         );
       }
@@ -386,7 +381,10 @@ export async function POST(request: Request) {
         );
 
         return NextResponse.json(
-          { error: "Subscription update failed." },
+          {
+            error:
+              "Subscription update failed.",
+          },
           { status: 500 }
         );
       }
