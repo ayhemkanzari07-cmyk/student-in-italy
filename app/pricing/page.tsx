@@ -52,6 +52,7 @@ const plans = [
 export default function PricingPage() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState("");
 
   useEffect(() => {
     async function loadUser() {
@@ -67,6 +68,53 @@ export default function PricingPage() {
 
     loadUser();
   }, []);
+
+  async function handleCheckout(planName: string) {
+    if (!user) {
+      window.location.href = `/login?redirect=/pricing`;
+      return;
+    }
+
+    setCheckoutLoading(planName);
+
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          plan: planName.toLowerCase(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Could not start checkout."
+        );
+      }
+
+      if (!data.url) {
+        throw new Error(
+          "Stripe checkout URL was not returned."
+        );
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      console.error("CHECKOUT ERROR:", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong with checkout."
+      );
+
+      setCheckoutLoading("");
+    }
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -126,85 +174,91 @@ export default function PricingPage() {
           </div>
 
           <div className="grid gap-6 lg:grid-cols-3">
-            {plans.map((plan) => (
-              <div
-                key={plan.name}
-                className={`relative flex flex-col rounded-3xl border bg-white p-7 shadow-sm ${
-                  plan.popular
-                    ? "border-blue-600 shadow-lg"
-                    : "border-slate-200"
-                }`}
-              >
-                {plan.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-1 text-xs font-bold text-white">
-                    MOST FEATURES
-                  </div>
-                )}
+            {plans.map((plan) => {
+              const isCheckingOut =
+                checkoutLoading === plan.name;
 
-                <div>
-                  <h2 className="text-2xl font-bold">{plan.name}</h2>
-
-                  <p className="mt-2 min-h-[48px] text-sm text-slate-500">
-                    {plan.subtitle}
-                  </p>
-                </div>
-
-                <div className="mt-6">
-                  <span className="text-4xl font-bold">{plan.price}</span>
-
-                  {plan.name === "Monthly" && (
-                    <span className="ml-2 text-sm text-slate-500">
-                      / month
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-5 rounded-2xl bg-slate-50 p-4">
-                  <p className="font-semibold text-slate-900">
-                    {plan.applications}
-                  </p>
-                </div>
-
-                <div className="my-7 h-px bg-slate-200" />
-
-                <ul className="flex-1 space-y-4">
-                  {plan.features.map((feature) => (
-                    <li
-                      key={feature}
-                      className="flex items-start gap-3 text-sm text-slate-700"
-                    >
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-600">
-                        ✓
-                      </span>
-
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    if (!user) {
-                      window.location.href = `/login?redirect=/pricing`;
-                      return;
-                    }
-
-                    alert(
-                      "Stripe checkout will be connected in the next step."
-                    );
-                  }}
-                  className={`mt-8 w-full rounded-2xl px-5 py-3.5 font-semibold transition ${
+              return (
+                <div
+                  key={plan.name}
+                  className={`relative flex flex-col rounded-3xl border bg-white p-7 shadow-sm ${
                     plan.popular
-                      ? "bg-blue-600 text-white hover:bg-blue-700"
-                      : "border border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                      ? "border-blue-600 shadow-lg"
+                      : "border-slate-200"
+                  }`}
                 >
-                  {loading ? "Loading..." : "Choose " + plan.name}
-                </button>
-              </div>
-            ))}
+                  {plan.popular && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-1 text-xs font-bold text-white">
+                      MOST FEATURES
+                    </div>
+                  )}
+
+                  <div>
+                    <h2 className="text-2xl font-bold">
+                      {plan.name}
+                    </h2>
+
+                    <p className="mt-2 min-h-[48px] text-sm text-slate-500">
+                      {plan.subtitle}
+                    </p>
+                  </div>
+
+                  <div className="mt-6">
+                    <span className="text-4xl font-bold">
+                      {plan.price}
+                    </span>
+
+                    {plan.name === "Monthly" && (
+                      <span className="ml-2 text-sm text-slate-500">
+                        / month
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+                    <p className="font-semibold text-slate-900">
+                      {plan.applications}
+                    </p>
+                  </div>
+
+                  <div className="my-7 h-px bg-slate-200" />
+
+                  <ul className="flex-1 space-y-4">
+                    {plan.features.map((feature) => (
+                      <li
+                        key={feature}
+                        className="flex items-start gap-3 text-sm text-slate-700"
+                      >
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-600">
+                          ✓
+                        </span>
+
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <button
+                    type="button"
+                    disabled={loading || isCheckingOut}
+                    onClick={() =>
+                      handleCheckout(plan.name)
+                    }
+                    className={`mt-8 w-full rounded-2xl px-5 py-3.5 font-semibold transition ${
+                      plan.popular
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "border border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {loading
+                      ? "Loading..."
+                      : isCheckingOut
+                      ? "Redirecting to Stripe..."
+                      : "Choose " + plan.name}
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           <div className="mx-auto mt-10 max-w-3xl rounded-2xl border border-slate-200 bg-white p-6 text-center">

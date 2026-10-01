@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 
 type Profile = {
+  id: string;
   full_name: string | null;
   phone: string | null;
   italian_level: string | null;
   experience: string | null;
   skills: string | null;
   availability: string | null;
-  package_type: string;
+  package_type: "none" | "basic" | "pro" | "monthly";
   credits: number;
 };
 
@@ -24,189 +25,385 @@ type CV = {
 
 type Application = {
   id: string;
+  job_id: string | null;
   job_title: string;
-  company: string;
-  location: string;
+  company: string | null;
+  location: string | null;
   package_type: string;
   status: string;
   created_at: string;
+  expires_at: string;
+};
+
+type Subscription = {
+  id: string;
+  stripe_subscription_id: string | null;
+  status: string;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
 };
 
 export default function DashboardPage() {
   const supabase = createClient();
 
-  const [profile, setProfile] = useState<Profile | null>(null);
   const [email, setEmail] = useState("");
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [cvs, setCvs] = useState<CV[]>([]);
-  const [applications, setApplications] = useState<Application[]>([]);
+  const [applications, setApplications] = useState<Application[]>(
+    []
+  );
+  const [subscription, setSubscription] =
+    useState<Subscription | null>(null);
 
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingCV, setUploadingCV] = useState(false);
+  const [subscriptionLoading, setSubscriptionLoading] =
+    useState(false);
+
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const [form, setForm] = useState({
+    full_name: "",
+    phone: "",
+    italian_level: "",
+    experience: "",
+    skills: "",
+    availability: "",
+  });
 
   async function loadDashboard() {
     setLoading(true);
+    setError("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      window.location.href = "/login";
-      return;
+      if (!user) {
+        window.location.href = "/login?redirect=/dashboard";
+        return;
+      }
+
+      setEmail(user.email || "");
+
+      const [
+        profileResponse,
+        cvsResponse,
+        subscriptionResponse,
+      ] = await Promise.all([
+        fetch("/api/profile"),
+        fetch("/api/cvs"),
+        fetch("/api/subscription"),
+      ]);
+
+      const profileData = await profileResponse.json();
+      const cvsData = await cvsResponse.json();
+      const subscriptionData =
+        await subscriptionResponse.json();
+
+      if (!profileResponse.ok) {
+        throw new Error(
+          profileData.error || "Unable to load profile."
+        );
+      }
+
+      if (!cvsResponse.ok) {
+        throw new Error(
+          cvsData.error || "Unable to load CVs."
+        );
+      }
+
+      const loadedProfile = profileData.profile as Profile;
+
+      setProfile(loadedProfile);
+
+      setForm({
+        full_name: loadedProfile.full_name || "",
+        phone: loadedProfile.phone || "",
+        italian_level: loadedProfile.italian_level || "",
+        experience: loadedProfile.experience || "",
+        skills: loadedProfile.skills || "",
+        availability: loadedProfile.availability || "",
+      });
+
+      setCvs(cvsData.cvs || []);
+
+      setSubscription(
+        subscriptionData.subscription || null
+      );
+
+      const {
+        data: applicationData,
+        error: applicationError,
+      } = await supabase
+        .from("applications")
+        .select(
+          "id, job_id, job_title, company, location, package_type, status, created_at, expires_at"
+        )
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        });
+
+      if (applicationError) {
+        throw new Error(
+          applicationError.message
+        );
+      }
+
+      setApplications(applicationData || []);
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setEmail(user.email ?? "");
-
-    const [profileResponse, cvsResponse] = await Promise.all([
-      fetch("/api/profile"),
-      fetch("/api/cvs"),
-    ]);
-
-    const profileData = await profileResponse.json();
-    const cvsData = await cvsResponse.json();
-
-    if (profileData.profile) {
-      setProfile(profileData.profile);
-    }
-
-    if (cvsData.cvs) {
-      setCvs(cvsData.cvs);
-    }
-
-    const { data: applicationData } = await supabase
-      .from("applications")
-      .select(
-        "id, job_title, company, location, package_type, status, created_at"
-      )
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    setApplications(applicationData ?? []);
-    setLoading(false);
   }
 
   useEffect(() => {
     loadDashboard();
   }, []);
 
-  async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!profile) return;
-
-    setSaving(true);
+  async function saveProfile() {
+    setSavingProfile(true);
     setMessage("");
+    setError("");
 
-    const response = await fetch("/api/profile", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(profile),
-    });
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(form),
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      setMessage(data.error || "Could not save profile.");
-    } else {
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to save profile."
+        );
+      }
+
       setProfile(data.profile);
-      setMessage("Profile saved successfully.");
+      setMessage("Profile updated successfully.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to save profile."
+      );
+    } finally {
+      setSavingProfile(false);
     }
-
-    setSaving(false);
   }
 
-  async function uploadCV(event: React.ChangeEvent<HTMLInputElement>) {
+  async function uploadCV(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
     const file = event.target.files?.[0];
 
     if (!file) return;
 
-    setUploading(true);
+    setUploadingCV(true);
     setMessage("");
+    setError("");
 
-    const formData = new FormData();
-    formData.append("file", file);
+    try {
+      if (cvs.length >= 2) {
+        throw new Error(
+          "You can upload a maximum of 2 CVs."
+        );
+      }
 
-    const response = await fetch("/api/cvs", {
-      method: "POST",
-      body: formData,
-    });
+      const formData = new FormData();
 
-    const data = await response.json();
+      formData.append("file", file);
 
-    if (!response.ok) {
-      setMessage(data.error || "Could not upload CV.");
-    } else {
-      setCvs((current) => [data.cv, ...current]);
+      const response = await fetch("/api/cvs", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to upload CV."
+        );
+      }
+
+      setCvs((current) => [
+        ...current,
+        data.cv,
+      ]);
+
       setMessage("CV uploaded successfully.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to upload CV."
+      );
+    } finally {
+      setUploadingCV(false);
+      event.target.value = "";
     }
-
-    event.target.value = "";
-    setUploading(false);
   }
 
   async function deleteCV(id: string) {
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this CV?"
-    );
-
-    if (!confirmed) return;
-
     setMessage("");
+    setError("");
 
-    const response = await fetch(`/api/cvs?id=${id}`, {
-      method: "DELETE",
-    });
+    try {
+      const response = await fetch(
+        `/api/cvs?id=${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+        }
+      );
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      setMessage(data.error || "Could not delete CV.");
-      return;
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to delete CV."
+        );
+      }
+
+      setCvs((current) =>
+        current.filter((cv) => cv.id !== id)
+      );
+
+      setMessage("CV deleted.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to delete CV."
+      );
     }
+  }
 
-    setCvs((current) => current.filter((cv) => cv.id !== id));
-    setMessage("CV deleted successfully.");
+  async function handleSubscription(
+    action: "cancel" | "reactivate"
+  ) {
+    setSubscriptionLoading(true);
+    setMessage("");
+    setError("");
+
+    try {
+      const response = await fetch(
+        "/api/subscription",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            "Unable to update subscription."
+        );
+      }
+
+      setMessage(
+        action === "cancel"
+          ? "Your subscription will end at the end of the current billing period."
+          : "Your subscription has been reactivated."
+      );
+
+      await loadDashboard();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update subscription."
+      );
+    } finally {
+      setSubscriptionLoading(false);
+    }
   }
 
   async function logout() {
-    await fetch("/auth/signout", {
-      method: "POST",
-    });
+    await supabase.auth.signOut();
 
     window.location.href = "/login";
   }
 
-  if (loading || !profile) {
+  function formatDate(date: string | null) {
+    if (!date) return "—";
+
+    return new Date(date).toLocaleDateString(
+      "en-GB",
+      {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }
+    );
+  }
+
+  function packageLabel(
+    packageType: string
+  ) {
+    if (packageType === "monthly") return "Monthly";
+    if (packageType === "pro") return "Pro";
+    if (packageType === "basic") return "Basic";
+
+    return "None";
+  }
+
+  if (loading) {
     return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">Loading dashboard...</p>
+      <main className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-6xl px-6 py-16">
+          <p className="text-slate-600">
+            Loading dashboard...
+          </p>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
+    <main className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/" className="text-2xl font-bold">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+          <Link
+            href="/"
+            className="text-xl font-bold text-blue-600"
+          >
             StudentInItaly
           </Link>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <Link
               href="/jobs"
-              className="text-gray-600 hover:text-black"
+              className="rounded-xl px-4 py-2 text-sm font-medium hover:bg-slate-100"
             >
               Find Jobs
             </Link>
 
             <button
               onClick={logout}
-              className="rounded-lg border px-4 py-2 hover:bg-gray-50"
+              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50"
             >
               Logout
             </button>
@@ -214,261 +411,451 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-6 py-10">
+      <section className="mx-auto max-w-6xl px-6 py-10">
         <div className="mb-8">
           <h1 className="text-3xl font-bold">
-            Welcome, {profile.full_name || "Student"} 👋
+            Dashboard
           </h1>
-          <p className="text-gray-600 mt-2">{email}</p>
+
+          <p className="mt-2 text-slate-600">
+            {email}
+          </p>
         </div>
 
         {message && (
-          <div className="mb-6 rounded-lg border bg-white px-4 py-3">
+          <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
             {message}
           </div>
         )}
 
-        <div className="grid md:grid-cols-3 gap-5 mb-8">
-          <div className="bg-white rounded-2xl border p-6">
-            <p className="text-sm text-gray-500">Available Credits</p>
-            <p className="text-4xl font-bold mt-2">
-              {profile.credits}
+        {error && (
+          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* ACCOUNT SUMMARY */}
+
+        <div className="grid gap-5 md:grid-cols-3">
+          <div className="rounded-2xl border bg-white p-6 shadow-sm">
+            <p className="text-sm text-slate-500">
+              Available applications
             </p>
+
+            <p className="mt-2 text-4xl font-bold text-blue-600">
+              {profile?.credits ?? 0}
+            </p>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Each application uses 1 credit.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-6 shadow-sm">
+            <p className="text-sm text-slate-500">
+              Current package
+            </p>
+
+            <p className="mt-2 text-2xl font-bold">
+              {packageLabel(
+                profile?.package_type || "none"
+              )}
+            </p>
+
             <Link
               href="/pricing"
-              className="inline-block mt-4 text-sm font-medium underline"
+              className="mt-4 inline-block text-sm font-semibold text-blue-600 hover:underline"
             >
-              Buy more applications
+              Buy applications →
             </Link>
           </div>
 
-          <div className="bg-white rounded-2xl border p-6">
-            <p className="text-sm text-gray-500">Current Package</p>
-            <p className="text-2xl font-bold mt-2 capitalize">
-              {profile.package_type}
+          <div className="rounded-2xl border bg-white p-6 shadow-sm">
+            <p className="text-sm text-slate-500">
+              Applications created
             </p>
-          </div>
 
-          <div className="bg-white rounded-2xl border p-6">
-            <p className="text-sm text-gray-500">CVs</p>
-            <p className="text-4xl font-bold mt-2">
-              {cvs.length}/2
+            <p className="mt-2 text-4xl font-bold">
+              {applications.length}
             </p>
           </div>
         </div>
 
-        <section className="bg-white rounded-2xl border p-6 mb-8">
-          <div className="flex items-center justify-between mb-6">
+        {/* SUBSCRIPTION */}
+
+        <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
+          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
             <div>
-              <h2 className="text-xl font-bold">My CVs</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Upload up to 2 CVs in PDF, DOC or DOCX format.
+              <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
+                Monthly subscription
+              </p>
+
+              <h2 className="mt-1 text-2xl font-bold">
+                {subscription
+                  ? "Monthly plan"
+                  : "No active subscription"}
+              </h2>
+
+              {subscription ? (
+                <div className="mt-3 space-y-1 text-sm text-slate-600">
+                  <p>
+                    Status:{" "}
+                    <span className="font-semibold capitalize">
+                      {subscription.status}
+                    </span>
+                  </p>
+
+                  <p>
+                    Next billing period end:{" "}
+                    <span className="font-semibold">
+                      {formatDate(
+                        subscription.current_period_end
+                      )}
+                    </span>
+                  </p>
+
+                  {subscription.cancel_at_period_end && (
+                    <p className="font-medium text-orange-600">
+                      Cancellation scheduled. Your
+                      subscription remains active until
+                      the current period ends.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-600">
+                  Get 9 new application credits every
+                  month with all Pro features.
+                </p>
+              )}
+            </div>
+
+            <div>
+              {!subscription ? (
+                <Link
+                  href="/pricing"
+                  className="inline-flex rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white hover:bg-blue-700"
+                >
+                  Choose Monthly
+                </Link>
+              ) : subscription.cancel_at_period_end ? (
+                <button
+                  onClick={() =>
+                    handleSubscription("reactivate")
+                  }
+                  disabled={subscriptionLoading}
+                  className="rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {subscriptionLoading
+                    ? "Updating..."
+                    : "Keep subscription"}
+                </button>
+              ) : (
+                <button
+                  onClick={() =>
+                    handleSubscription("cancel")
+                  }
+                  disabled={subscriptionLoading}
+                  className="rounded-xl border border-red-200 px-5 py-3 font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {subscriptionLoading
+                    ? "Updating..."
+                    : "Cancel subscription"}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* CVs */}
+
+        <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+            <div>
+              <h2 className="text-xl font-bold">
+                Your CVs
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                You can store up to 2 CVs.
               </p>
             </div>
 
             <label
-              className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-medium ${
-                cvs.length >= 2 || uploading
-                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                  : "bg-black text-white"
+              className={`cursor-pointer rounded-xl px-5 py-3 text-sm font-semibold ${
+                cvs.length >= 2 || uploadingCV
+                  ? "cursor-not-allowed bg-slate-200 text-slate-500"
+                  : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
             >
-              {uploading ? "Uploading..." : "Upload CV"}
+              {uploadingCV
+                ? "Uploading..."
+                : "Upload CV"}
 
               <input
                 type="file"
                 accept=".pdf,.doc,.docx"
-                className="hidden"
-                disabled={cvs.length >= 2 || uploading}
+                disabled={
+                  cvs.length >= 2 ||
+                  uploadingCV
+                }
                 onChange={uploadCV}
+                className="hidden"
               />
             </label>
           </div>
 
-          {cvs.length === 0 ? (
-            <div className="rounded-xl border border-dashed p-8 text-center text-gray-500">
-              No CV uploaded yet.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {cvs.map((cv) => (
+          <div className="mt-6 space-y-3">
+            {cvs.length === 0 ? (
+              <div className="rounded-xl bg-slate-50 p-5 text-sm text-slate-600">
+                No CV uploaded yet. You can upload a
+                PDF, DOC or DOCX file.
+              </div>
+            ) : (
+              cvs.map((cv) => (
                 <div
                   key={cv.id}
-                  className="flex items-center justify-between rounded-xl border p-4"
+                  className="flex flex-col justify-between gap-3 rounded-xl border p-4 sm:flex-row sm:items-center"
                 >
                   <div>
-                    <p className="font-medium">{cv.file_name}</p>
-                    <p className="text-sm text-gray-500 uppercase mt-1">
-                      {cv.file_type}
+                    <p className="font-semibold">
+                      {cv.file_name}
+                    </p>
+
+                    <p className="mt-1 text-xs text-slate-500">
+                      Uploaded{" "}
+                      {formatDate(cv.created_at)}
                     </p>
                   </div>
 
                   <button
-                    onClick={() => deleteCV(cv.id)}
-                    className="text-sm text-red-600 hover:underline"
+                    onClick={() =>
+                      deleteCV(cv.id)
+                    }
+                    className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
                   >
                     Delete
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </section>
 
-        <section className="bg-white rounded-2xl border p-6 mb-8">
-          <h2 className="text-xl font-bold mb-6">My Profile</h2>
+        {/* PROFILE */}
 
-          <form onSubmit={saveProfile} className="space-y-5">
+        <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-bold">
+            Your profile
+          </h2>
+
+          <p className="mt-1 text-sm text-slate-500">
+            This information helps StudentInItaly
+            personalize your applications.
+          </p>
+
+          <div className="mt-6 grid gap-5 md:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Full Name
+              <label className="text-sm font-medium">
+                Full name
               </label>
+
               <input
-                value={profile.full_name ?? ""}
+                value={form.full_name}
                 onChange={(e) =>
-                  setProfile({
-                    ...profile,
+                  setForm({
+                    ...form,
                     full_name: e.target.value,
                   })
                 }
-                className="w-full rounded-lg border px-4 py-3"
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label className="text-sm font-medium">
                 Phone
               </label>
+
               <input
-                value={profile.phone ?? ""}
+                value={form.phone}
                 onChange={(e) =>
-                  setProfile({
-                    ...profile,
+                  setForm({
+                    ...form,
                     phone: e.target.value,
                   })
                 }
-                className="w-full rounded-lg border px-4 py-3"
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Italian Level
+              <label className="text-sm font-medium">
+                Italian level
               </label>
+
               <input
-                value={profile.italian_level ?? ""}
+                value={form.italian_level}
                 onChange={(e) =>
-                  setProfile({
-                    ...profile,
+                  setForm({
+                    ...form,
                     italian_level: e.target.value,
                   })
                 }
-                placeholder="A2, B1, B2..."
-                className="w-full rounded-lg border px-4 py-3"
+                placeholder="A1, A2, B1, B2..."
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label className="text-sm font-medium">
+                Availability
+              </label>
+
+              <input
+                value={form.availability}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    availability: e.target.value,
+                  })
+                }
+                placeholder="Full-time, weekends..."
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="text-sm font-medium">
                 Experience
               </label>
+
               <textarea
-                value={profile.experience ?? ""}
+                value={form.experience}
                 onChange={(e) =>
-                  setProfile({
-                    ...profile,
+                  setForm({
+                    ...form,
                     experience: e.target.value,
                   })
                 }
                 rows={4}
-                className="w-full rounded-lg border px-4 py-3"
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2">
+            <div className="md:col-span-2">
+              <label className="text-sm font-medium">
                 Skills
               </label>
+
               <textarea
-                value={profile.skills ?? ""}
+                value={form.skills}
                 onChange={(e) =>
-                  setProfile({
-                    ...profile,
+                  setForm({
+                    ...form,
                     skills: e.target.value,
                   })
                 }
                 rows={4}
-                placeholder="Excel, Photoshop, Customer Service..."
-                className="w-full rounded-lg border px-4 py-3"
+                placeholder="Customer service, Excel, sales..."
+                className="mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Availability
-              </label>
-              <input
-                value={profile.availability ?? ""}
-                onChange={(e) =>
-                  setProfile({
-                    ...profile,
-                    availability: e.target.value,
-                  })
-                }
-                placeholder="Full-time, Part-time, Weekends..."
-                className="w-full rounded-lg border px-4 py-3"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg bg-black text-white px-6 py-3 font-medium disabled:opacity-50"
-            >
-              {saving ? "Saving..." : "Save Profile"}
-            </button>
-          </form>
+          <button
+            onClick={saveProfile}
+            disabled={savingProfile}
+            className="mt-6 rounded-xl bg-slate-900 px-6 py-3 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {savingProfile
+              ? "Saving..."
+              : "Save profile"}
+          </button>
         </section>
 
-        <section className="bg-white rounded-2xl border p-6">
-          <h2 className="text-xl font-bold mb-6">
-            Application History
-          </h2>
+        {/* APPLICATION HISTORY */}
 
-          {applications.length === 0 ? (
-            <p className="text-gray-500">
-              You haven't created any applications yet.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {applications.map((application) => (
+        <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold">
+                Application history
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Your previous application records.
+              </p>
+            </div>
+
+            <Link
+              href="/jobs"
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Find jobs
+            </Link>
+          </div>
+
+          <div className="mt-6 space-y-3">
+            {applications.length === 0 ? (
+              <div className="rounded-xl bg-slate-50 p-5 text-sm text-slate-600">
+                You haven't created an application yet.
+              </div>
+            ) : (
+              applications.map((application) => (
                 <div
                   key={application.id}
-                  className="rounded-xl border p-4"
+                  className="flex flex-col justify-between gap-4 rounded-xl border p-5 sm:flex-row sm:items-center"
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="font-semibold">
-                        {application.job_title}
-                      </p>
-                      <p className="text-gray-600">
-                        {application.company}
-                      </p>
-                      <p className="text-sm text-gray-500 mt-1">
-                        {application.location}
-                      </p>
-                    </div>
+                  <div>
+                    <h3 className="font-semibold">
+                      {application.job_title}
+                    </h3>
 
-                    <span className="text-sm capitalize">
-                      {application.status}
-                    </span>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {application.company ||
+                        "Company not specified"}
+                    </p>
+
+                    <p className="mt-1 text-xs text-slate-500">
+                      {application.location ||
+                        "Location not specified"}
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium">
+                        {packageLabel(
+                          application.package_type
+                        )}
+                      </span>
+
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium capitalize">
+                        {application.status}
+                      </span>
+
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                        {formatDate(
+                          application.created_at
+                        )}
+                      </span>
+                    </div>
                   </div>
+
+                  {application.status !==
+                    "expired" && (
+                    <Link
+                      href={`/apply/result?id=${application.id}`}
+                      className="rounded-xl border border-blue-200 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50"
+                    >
+                      View application
+                    </Link>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </section>
-      </div>
+      </section>
     </main>
   );
 }

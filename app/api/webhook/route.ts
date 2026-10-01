@@ -6,104 +6,70 @@ import { getStripe } from "@/lib/stripe";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const stripe = getStripe();
-
-  const signature = request.headers.get("stripe-signature");
-
-  if (!signature) {
-    return NextResponse.json(
-      { error: "Missing Stripe signature." },
-      { status: 400 }
-    );
-  }
-
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!webhookSecret) {
-    return NextResponse.json(
-      { error: "Stripe webhook is not configured." },
-      { status: 503 }
-    );
-  }
-
-  const rawBody = await request.text();
-
-  let event: Stripe.Event;
-
   try {
-    event = stripe.webhooks.constructEvent(
-      rawBody,
-      signature,
-      webhookSecret
-    );
-  } catch (error) {
-    console.error("Stripe webhook signature error:", error);
+    const stripe = getStripe();
 
-    return NextResponse.json(
-      { error: "Invalid webhook signature." },
-      { status: 400 }
-    );
-  }
+    const signature = request.headers.get("stripe-signature");
 
-  try {
+    if (!signature) {
+      return NextResponse.json(
+        { error: "Missing Stripe signature." },
+        { status: 400 }
+      );
+    }
+
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      return NextResponse.json(
+        { error: "Stripe webhook is not configured." },
+        { status: 503 }
+      );
+    }
+
+    const rawBody = await request.text();
+
+    let event: Stripe.Event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        rawBody,
+        signature,
+        webhookSecret
+      );
+    } catch (error) {
+      console.error("Invalid Stripe webhook:", error);
+
+      return NextResponse.json(
+        { error: "Invalid webhook signature." },
+        { status: 400 }
+      );
+    }
+
     const supabase = await createClient();
 
     /*
-     * ONE-TIME PAYMENTS
+     * =====================================================
+     * 1. ONE-TIME PAYMENTS
      * Basic / Pro
+     * =====================================================
      */
+
     if (event.type === "checkout.session.completed") {
       const session =
         event.data.object as Stripe.Checkout.Session;
 
       const userId = session.metadata?.user_id;
-      const productType = session.metadata?.product_type;
+      const productType =
+        session.metadata?.product_type;
+
       const credits = Number(
         session.metadata?.credits || 0
       );
 
       if (!userId || !productType || !credits) {
-        console.error("Missing checkout metadata.");
-
-        return NextResponse.json({
-          received: true,
-        });
-      }
-
-      if (session.payment_status !== "paid") {
-        return NextResponse.json({
-          received: true,
-        });
-      }
-
-      /*
-       * Find the pending purchase.
-       */
-      const { data: purchase, error: purchaseFindError } =
-        await supabase
-          .from("purchases")
-          .select("*")
-          .eq(
-            "stripe_checkout_session_id",
-            session.id
-          )
-          .maybeSingle();
-
-      if (purchaseFindError) {
         console.error(
-          "Purchase lookup error:",
-          purchaseFindError
-        );
-
-        return NextResponse.json(
-          { error: "Unable to find purchase." },
-          { status: 500 }
-        );
-      }
-
-      if (!purchase) {
-        console.error(
-          "Purchase record not found:",
+          "Missing checkout metadata:",
           session.id
         );
 
@@ -113,110 +79,77 @@ export async function POST(request: Request) {
       }
 
       /*
-       * Idempotency:
-       * Never add credits twice for the same purchase.
+       * Credits are added only when Stripe confirms payment.
        */
-      if (purchase.status === "paid") {
+
+      if (session.payment_status !== "paid") {
         return NextResponse.json({
           received: true,
+          paymentStatus: session.payment_status,
         });
       }
 
       /*
-       * Get current profile.
+       * Process the purchase atomically inside PostgreSQL.
+       *
+       * This handles:
+       * - pending purchase → paid
+       * - credits addition
+       * - Stripe event id
+       * - duplicate protection
        */
-      const { data: profile, error: profileError } =
-        await supabase
-          .from("profiles")
-          .select("credits")
-          .eq("id", userId)
-          .single();
 
-      if (profileError || !profile) {
+      const { data, error } = await supabase.rpc(
+        "process_stripe_purchase",
+        {
+          p_user_id: userId,
+          p_product_type: productType,
+          p_credits: credits,
+          p_amount_cents:
+            typeof session.amount_total === "number"
+              ? session.amount_total
+              : 0,
+          p_currency:
+            session.currency || "eur",
+          p_checkout_session_id: session.id,
+          p_stripe_event_id: event.id,
+        }
+      );
+
+      if (error) {
         console.error(
-          "Profile lookup error:",
-          profileError
+          "Stripe purchase RPC error:",
+          error
         );
 
         return NextResponse.json(
-          { error: "Profile not found." },
+          { error: "Purchase processing failed." },
           { status: 500 }
         );
       }
 
-      /*
-       * Add purchased credits.
-       */
-      const newCredits =
-        Number(profile.credits || 0) + credits;
-
-      const { error: creditError } =
-        await supabase
-          .from("profiles")
-          .update({
-            credits: newCredits,
-            package_type: productType,
-          })
-          .eq("id", userId);
-
-      if (creditError) {
-        console.error(
-          "Credit update failed:",
-          creditError
-        );
-
-        return NextResponse.json(
-          { error: "Unable to add credits." },
-          { status: 500 }
-        );
-      }
-
-      /*
-       * Mark purchase as paid.
-       */
-      const { error: purchaseUpdateError } =
-        await supabase
-          .from("purchases")
-          .update({
-            status: "paid",
-            credits_added: credits,
-          })
-          .eq("id", purchase.id)
-          .eq("status", "pending");
-
-      if (purchaseUpdateError) {
-        console.error(
-          "Purchase update failed:",
-          purchaseUpdateError
-        );
-
-        return NextResponse.json(
-          { error: "Unable to update purchase." },
-          { status: 500 }
-        );
-      }
+      console.log(
+        "Stripe one-time payment processed:",
+        data
+      );
 
       return NextResponse.json({
         received: true,
+        result: data,
       });
     }
 
     /*
-     * MONTHLY SUBSCRIPTION
-     *
-     * Every successful recurring invoice adds
-     * 9 credits.
+     * =====================================================
+     * 2. MONTHLY SUBSCRIPTION PAYMENT
+     * =====================================================
      */
+
     if (event.type === "invoice.paid") {
       const invoice =
         event.data.object as Stripe.Invoice;
 
-      /*
-       * Stripe's current TypeScript definitions may not
-       * expose subscription directly on Invoice.
-       * We safely read it here.
-       */
-      const subscriptionId =
+      const subscriptionReference =
         (
           invoice as Stripe.Invoice & {
             subscription?:
@@ -225,20 +158,24 @@ export async function POST(request: Request) {
           }
         ).subscription;
 
-      const subscriptionIdValue =
-        typeof subscriptionId === "string"
-          ? subscriptionId
-          : subscriptionId?.id;
+      const subscriptionId =
+        typeof subscriptionReference === "string"
+          ? subscriptionReference
+          : subscriptionReference?.id;
 
-      if (!subscriptionIdValue) {
+      if (!subscriptionId) {
         return NextResponse.json({
           received: true,
         });
       }
 
+      /*
+       * Retrieve the current subscription from Stripe.
+       */
+
       const subscription =
         await stripe.subscriptions.retrieve(
-          subscriptionIdValue
+          subscriptionId
         );
 
       const userId =
@@ -259,79 +196,70 @@ export async function POST(request: Request) {
         });
       }
 
-      /*
-       * Get current profile.
-       */
-      const { data: profile, error: profileError } =
-        await supabase
-          .from("profiles")
-          .select("credits")
-          .eq("id", userId)
-          .single();
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
 
-      if (profileError || !profile) {
+      /*
+       * Process the monthly payment atomically.
+       *
+       * This handles:
+       * - +9 credits
+       * - purchase record
+       * - duplicate Stripe event protection
+       */
+
+      const { data, error } = await supabase.rpc(
+        "process_stripe_monthly_payment",
+        {
+          p_user_id: userId,
+          p_credits: credits,
+          p_amount_cents: 2790,
+          p_currency: "eur",
+          p_stripe_customer_id: customerId,
+          p_stripe_subscription_id:
+            subscription.id,
+          p_stripe_payment_id:
+            typeof invoice.id === "string"
+              ? invoice.id
+              : null,
+          p_stripe_event_id: event.id,
+        }
+      );
+
+      if (error) {
         console.error(
-          "Profile lookup error:",
-          profileError
+          "Monthly payment RPC error:",
+          error
         );
 
         return NextResponse.json(
-          { error: "Profile not found." },
+          { error: "Monthly payment processing failed." },
           { status: 500 }
         );
       }
 
       /*
-       * Add monthly credits.
+       * Update subscription status and billing period.
        */
-      const newCredits =
-        Number(profile.credits || 0) + credits;
 
-      const { error: creditError } =
-        await supabase
-          .from("profiles")
-          .update({
-            credits: newCredits,
-            package_type: "monthly",
-          })
-          .eq("id", userId);
-
-      if (creditError) {
-        console.error(
-          "Monthly credit update failed:",
-          creditError
-        );
-
-        return NextResponse.json(
-          { error: "Unable to add monthly credits." },
-          { status: 500 }
-        );
-      }
-
-      /*
-       * Save / update subscription.
-       */
       const firstItem =
         subscription.items.data[0];
 
-      const periodStart =
+      const currentPeriodStart =
         firstItem?.current_period_start
           ? new Date(
               firstItem.current_period_start * 1000
             ).toISOString()
           : null;
 
-      const periodEnd =
+      const currentPeriodEnd =
         firstItem?.current_period_end
           ? new Date(
               firstItem.current_period_end * 1000
             ).toISOString()
           : null;
-
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
 
       const { error: subscriptionError } =
         await supabase
@@ -344,9 +272,9 @@ export async function POST(request: Request) {
               stripe_customer_id: customerId,
               status: subscription.status,
               current_period_start:
-                periodStart,
+                currentPeriodStart,
               current_period_end:
-                periodEnd,
+                currentPeriodEnd,
               cancel_at_period_end:
                 subscription.cancel_at_period_end,
             },
@@ -357,24 +285,33 @@ export async function POST(request: Request) {
 
       if (subscriptionError) {
         console.error(
-          "Subscription update failed:",
+          "Subscription update error:",
           subscriptionError
         );
 
         return NextResponse.json(
-          { error: "Unable to update subscription." },
+          { error: "Subscription update failed." },
           { status: 500 }
         );
       }
 
+      console.log(
+        "Stripe monthly payment processed:",
+        data
+      );
+
       return NextResponse.json({
         received: true,
+        result: data,
       });
     }
 
     /*
-     * Subscription status changes.
+     * =====================================================
+     * 3. SUBSCRIPTION STATUS CHANGES
+     * =====================================================
      */
+
     if (
       event.type ===
         "customer.subscription.updated" ||
@@ -399,26 +336,64 @@ export async function POST(request: Request) {
           ? "cancelled"
           : subscription.status;
 
+      const firstItem =
+        subscription.items.data[0];
+
+      const currentPeriodStart =
+        firstItem?.current_period_start
+          ? new Date(
+              firstItem.current_period_start * 1000
+            ).toISOString()
+          : null;
+
+      const currentPeriodEnd =
+        firstItem?.current_period_end
+          ? new Date(
+              firstItem.current_period_end * 1000
+            ).toISOString()
+          : null;
+
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
+
       const { error } = await supabase
         .from("subscriptions")
-        .update({
-          status,
-          cancel_at_period_end:
-            subscription.cancel_at_period_end,
-        })
-        .eq("user_id", userId);
+        .upsert(
+          {
+            user_id: userId,
+            stripe_subscription_id:
+              subscription.id,
+            stripe_customer_id: customerId,
+            status,
+            current_period_start:
+              currentPeriodStart,
+            current_period_end:
+              currentPeriodEnd,
+            cancel_at_period_end:
+              subscription.cancel_at_period_end,
+          },
+          {
+            onConflict: "user_id",
+          }
+        );
 
       if (error) {
         console.error(
-          "Subscription status update failed:",
+          "Subscription status error:",
           error
         );
 
         return NextResponse.json(
-          { error: "Unable to update subscription." },
+          { error: "Subscription update failed." },
           { status: 500 }
         );
       }
+
+      console.log(
+        `Subscription status updated: ${status}`
+      );
 
       return NextResponse.json({
         received: true,
@@ -426,8 +401,11 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Ignore events that we don't need.
+     * =====================================================
+     * 4. EVENTS WE DON'T NEED
+     * =====================================================
      */
+
     return NextResponse.json({
       received: true,
     });
@@ -444,9 +422,7 @@ export async function POST(request: Request) {
             ? error.message
             : "Webhook processing failed.",
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     );
   }
 }

@@ -1,184 +1,48 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+
 import { createClient } from "@/utils/supabase/server";
+import { extractCvText } from "@/lib/cv-parser";
+
+export const runtime = "nodejs";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const applicationSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    whatsapp: {
-      type: "string",
-    },
+const MAX_JOB_DESCRIPTION_LENGTH = 20000;
 
-    email: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        subject: {
-          type: "string",
-        },
-        body: {
-          type: "string",
-        },
-      },
-      required: ["subject", "body"],
-    },
+type PackageType = "basic" | "pro" | "monthly";
 
-    coverLetter: {
-      type: "string",
-    },
+function isPackageType(value: unknown): value is PackageType {
+  return (
+    value === "basic" ||
+    value === "pro" ||
+    value === "monthly"
+  );
+}
 
-    interviewPrep: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          question: {
-            type: "string",
-          },
-          answer: {
-            type: "string",
-          },
-        },
-        required: ["question", "answer"],
-      },
-    },
+function cleanJobDescription(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
 
-    cv: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        title: {
-          type: "string",
-        },
-        profile: {
-          type: "string",
-        },
-        experience: {
-          type: "string",
-        },
-        skills: {
-          type: "string",
-        },
-        availability: {
-          type: "string",
-        },
-      },
-      required: [
-        "title",
-        "profile",
-        "experience",
-        "skills",
-        "availability",
-      ],
-    },
+  return value
+    .replace(/\u0000/g, "")
+    .trim()
+    .slice(0, MAX_JOB_DESCRIPTION_LENGTH);
+}
 
-    proAnalysis: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        matchScore: {
-          type: "number",
-        },
-
-        requirements: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-
-        strategy: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-
-        checklist: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-
-        qualityReport: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-
-        advancedInterviewPrep: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              question: {
-                type: "string",
-              },
-              howToAnswer: {
-                type: "string",
-              },
-              mistakeToAvoid: {
-                type: "string",
-              },
-              example: {
-                type: "string",
-              },
-            },
-            required: [
-              "question",
-              "howToAnswer",
-              "mistakeToAvoid",
-              "example",
-            ],
-          },
-        },
-      },
-
-      required: [
-        "matchScore",
-        "requirements",
-        "strategy",
-        "checklist",
-        "qualityReport",
-        "advancedInterviewPrep",
-      ],
-    },
-  },
-
-  required: [
-    "whatsapp",
-    "email",
-    "coverLetter",
-    "interviewPrep",
-    "cv",
-    "proAnalysis",
-  ],
-} as const;
-
-export async function POST(request: Request) {
-  let createdApplicationId: string | null = null;
-
+export async function GET(request: Request) {
   try {
-    // --------------------------------------------------
-    // 1. SUPABASE / AUTH
-    // --------------------------------------------------
-
     const supabase = await createClient();
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       return NextResponse.json(
         {
           success: false,
@@ -188,44 +52,127 @@ export async function POST(request: Request) {
       );
     }
 
-    // --------------------------------------------------
-    // 2. READ REQUEST
-    // --------------------------------------------------
+    const { searchParams } = new URL(request.url);
+    const applicationId = searchParams.get("id");
+
+    if (!applicationId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Application ID is required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const { data: application, error: applicationError } =
+      await supabase
+        .from("applications")
+        .select(
+          "id, user_id, job_id, job_title, company, location, job_url, job_description, package_type, credit_used, content, status, created_at, expires_at"
+        )
+        .eq("id", applicationId)
+        .eq("user_id", user.id)
+        .single();
+
+    if (applicationError || !application) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Application not found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    const expired =
+      application.status === "expired" ||
+      (
+        application.expires_at &&
+        new Date(application.expires_at).getTime() <= Date.now()
+      );
+
+    if (expired || !application.content) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "This application pack has expired. Generated content is available for 48 hours only.",
+        },
+        { status: 410 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      application,
+    });
+  } catch (error) {
+    console.error("APPLICATION GET ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not load the application.",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "You must be logged in.",
+        },
+        { status: 401 }
+      );
+    }
 
     const body = await request.json();
 
     const {
       jobId,
-      job,
+      jobTitle,
       company,
       location,
       jobUrl,
-      description,
-      name,
+      jobDescription,
+      fullName,
+      phone,
       italianLevel,
       experience,
       skills,
       availability,
-      cvName,
+      cvId,
       packageType,
     } = body;
 
-    // --------------------------------------------------
-    // 3. VALIDATION
-    // --------------------------------------------------
-
     if (
-      !job ||
-      !name ||
+      !jobTitle ||
+      !company ||
+      !location ||
+      !fullName ||
       !italianLevel ||
-      !experience ||
-      !skills ||
       !availability
     ) {
       return NextResponse.json(
         {
           success: false,
-          error: "Please complete all required fields.",
+          error: "Missing required application information.",
         },
         { status: 400 }
       );
@@ -241,253 +188,588 @@ export async function POST(request: Request) {
       );
     }
 
-    // --------------------------------------------------
-    // 4. GET PROFILE
-    // --------------------------------------------------
+    const selectedPackage: PackageType = isPackageType(packageType)
+      ? packageType
+      : "basic";
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
+    /*
+     * ---------------------------------------------------------
+     * 1. LOAD USER PROFILE
+     * ---------------------------------------------------------
+     */
+
+    const { data: profile, error: profileError } =
+      await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
 
     if (profileError || !profile) {
       return NextResponse.json(
         {
           success: false,
-          error: "Your profile could not be found.",
+          error: "User profile not found.",
         },
         { status: 404 }
       );
     }
 
-    // --------------------------------------------------
-    // 5. CHECK CREDITS
-    // --------------------------------------------------
-
-    if (profile.credits < 1) {
+    if (!profile.credits || profile.credits < 1) {
       return NextResponse.json(
         {
           success: false,
           error:
-            "You don't have any application credits left.",
-          code: "NO_CREDITS",
+            "You don't have enough application credits.",
         },
         { status: 402 }
       );
     }
 
-    // --------------------------------------------------
-    // 6. PACKAGE
-    // --------------------------------------------------
+    /*
+     * ---------------------------------------------------------
+     * 2. LOAD AND READ CV
+     * ---------------------------------------------------------
+     */
 
-    const allowedPackages = [
-      "basic",
-      "pro",
-      "monthly",
-    ];
+    let cvText = "";
 
-    const requestedPackage =
-      packageType || profile.package_type;
+    if (cvId) {
+      const { data: cv, error: cvError } =
+        await supabase
+          .from("user_cvs")
+          .select(
+            "id, file_name, file_path, file_type"
+          )
+          .eq("id", cvId)
+          .eq("user_id", user.id)
+          .single();
 
-    const finalPackage = allowedPackages.includes(
-      requestedPackage
-    )
-      ? requestedPackage
-      : "basic";
+      if (cvError || !cv) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Selected CV was not found.",
+          },
+          { status: 404 }
+        );
+      }
 
-    const isPro =
-      finalPackage === "pro" ||
-      finalPackage === "monthly";
+      const { data: cvFile, error: downloadError } =
+        await supabase.storage
+          .from("cvs")
+          .download(cv.file_path);
 
-    // --------------------------------------------------
-    // 7. BUILD AI PROMPT
-    // --------------------------------------------------
+      if (downloadError || !cvFile) {
+        console.error(
+          "CV DOWNLOAD ERROR:",
+          downloadError
+        );
 
-    const prompt = `
-You are the professional AI application specialist for StudentInItaly.
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "We couldn't read your CV. Please try uploading it again.",
+          },
+          { status: 500 }
+        );
+      }
 
-Create a professional job application package for a candidate applying to a real job in Italy.
+      const arrayBuffer = await cvFile.arrayBuffer();
 
-IMPORTANT RULES:
+      const buffer = Buffer.from(arrayBuffer);
 
-- Never invent qualifications.
-- Never invent work experience.
-- Never invent degrees.
-- Never invent certificates.
-- Never invent languages.
-- Never invent skills.
-- Use only information provided by the candidate.
-- You may improve wording and structure.
-- Write natural professional Italian.
-- Make the application specific to the job.
-- Do not mention that AI was used.
-- Do not make false claims.
-- Do not promise that the candidate will get the job.
+      try {
+        cvText = await extractCvText(
+          buffer,
+          cv.file_name
+        );
+      } catch (error) {
+        console.error(
+          "CV EXTRACTION ERROR:",
+          error
+        );
 
-CANDIDATE
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "We couldn't extract text from your CV.",
+          },
+          { status: 422 }
+        );
+      }
+    }
 
-Name:
-${name}
+    /*
+     * ---------------------------------------------------------
+     * 3. PREPARE JOB INFORMATION
+     * ---------------------------------------------------------
+     */
 
-Italian level:
-${italianLevel}
+    const safeJobDescription =
+      cleanJobDescription(jobDescription);
 
-Experience:
-${experience}
+    /*
+     * ---------------------------------------------------------
+     * 4. BUILD CV CONTEXT
+     * ---------------------------------------------------------
+     */
 
-Skills:
-${skills}
+    const cvSection = cvText
+      ? `
+CV DEL CANDIDATO
+================
 
-Availability:
-${availability}
+Il testo seguente proviene dal CV caricato dal candidato.
 
-Existing CV:
-${cvName || "No CV uploaded"}
+${cvText}
 
-JOB
+================
+FINE CV
+`
+      : `
+CV DEL CANDIDATO
+================
 
-Position:
-${job}
+Il candidato non ha caricato un CV.
 
-Company:
-${company || "Not specified"}
+Devi creare la sezione CV partendo esclusivamente
+dalle informazioni del profilo fornite sotto.
 
-Location:
-${location || "Not specified"}
-
-Job URL:
-${jobUrl || "Not available"}
-
-Job description:
-${description || "No detailed job description available"}
-
-PACKAGE
-
-${isPro ? "PRO / MONTHLY PACKAGE" : "BASIC PACKAGE"}
-
-BASIC PACKAGE MUST INCLUDE:
-
-1. Professional WhatsApp application message.
-2. Professional application email.
-3. Customized Italian cover letter.
-4. Basic interview preparation.
-5. CV profile/adaptation content.
-
-PRO / MONTHLY MUST ALSO INCLUDE:
-
-1. Job Match Score from 0 to 100.
-2. Job requirements analysis.
-3. Personalized application strategy.
-4. Application checklist.
-5. Application quality report.
-6. Advanced interview preparation.
-
-IMPORTANT:
-
-Do NOT create a Missing Skills Analysis.
-
-The Match Score must be based only on the information supplied by the candidate and the job description.
-
-If the job description is incomplete, make that limitation clear in the analysis.
-
-For the CV section, create professional text that can later be converted into a clean DOCX CV.
-
-Use professional Italian suitable for an Italian employer.
+================
 `;
 
-    // --------------------------------------------------
-    // 8. CALL OPENAI
-    // --------------------------------------------------
+    /*
+     * ---------------------------------------------------------
+     * 5. PACKAGE FEATURES
+     * ---------------------------------------------------------
+     */
+
+    const isPro =
+      selectedPackage === "pro" ||
+      selectedPackage === "monthly";
+
+    const basicInstructions = `
+Genera un application pack professionale in italiano.
+
+Deve contenere:
+
+1. WhatsApp message
+2. Email con subject e body
+3. Cover letter
+4. Interview preparation
+5. CV adattato alla posizione
+
+Il CV deve essere semplice, professionale e leggibile.
+
+NON inventare esperienze lavorative, aziende,
+titoli di studio o competenze che non risultano
+dal CV o dal profilo.
+
+Puoi migliorare la formulazione e organizzare
+le informazioni esistenti in modo professionale.
+
+Interview preparation:
+crea domande realistiche con risposte utili
+e coerenti con il profilo del candidato.
+`;
+
+    const proInstructions = `
+Oltre a tutto ciò che è incluso nel Basic,
+aggiungi:
+
+1. Job Match Analysis
+   - matchScore da 0 a 100
+   - spiegazione sintetica del livello di compatibilità
+
+2. Job Requirements Analysis
+   - analizza i requisiti principali dell'offerta
+
+3. Personalized Application Strategy
+   - spiega come il candidato dovrebbe presentarsi
+   - indica cosa enfatizzare nell'application
+
+4. Application Checklist
+   - lista pratica delle cose da controllare prima di inviare la candidatura
+
+5. Application Quality Report
+   - valuta la qualità complessiva dell'application
+   - indica punti forti
+   - indica aspetti da migliorare
+
+6. Advanced Interview Preparation
+   - domande realistiche
+   - come rispondere
+   - cosa enfatizzare
+   - errori da evitare
+   - esempi di risposta
+
+NON creare una Missing Skills Analysis.
+
+NON creare una sezione separata di frasi italiane.
+`;
+
+    /*
+     * ---------------------------------------------------------
+     * 6. OPENAI PROMPT
+     * ---------------------------------------------------------
+     */
+
+    const prompt = `
+Sei l'AI application assistant di StudentInItaly.
+
+Il tuo compito è aiutare uno studente internazionale
+a candidarsi per un lavoro reale in Italia.
+
+TUTTO il contenuto generato deve essere in italiano.
+
+IMPORTANTE:
+- Usa il CV reale quando disponibile.
+- Non inventare informazioni personali.
+- Non inventare esperienze.
+- Non inventare aziende.
+- Non inventare certificazioni.
+- Non inventare competenze.
+- Puoi migliorare grammaticalmente le informazioni esistenti.
+- Devi adattare il CV e la candidatura all'offerta di lavoro.
+- Mantieni un tono professionale ma naturale.
+- Considera il livello di italiano dichiarato dal candidato.
+- Il candidato potrebbe avere un livello di italiano non perfetto:
+  evita formulazioni inutilmente complicate.
+
+========================
+INFORMAZIONI CANDIDATO
+========================
+
+Nome:
+${fullName}
+
+Telefono:
+${phone || "Non specificato"}
+
+Livello italiano:
+${italianLevel}
+
+Esperienza:
+${experience || "Non specificata"}
+
+Competenze:
+${skills || "Non specificate"}
+
+Disponibilità:
+${availability}
+
+========================
+OFFERTA DI LAVORO
+========================
+
+Job ID:
+${jobId || "Non specificato"}
+
+Posizione:
+${jobTitle}
+
+Azienda:
+${company}
+
+Località:
+${location}
+
+URL:
+${jobUrl || "Non specificato"}
+
+Descrizione:
+${safeJobDescription || "Non disponibile"}
+
+${cvSection}
+
+========================
+ISTRUZIONI PACKAGE
+========================
+
+${
+  isPro
+    ? proInstructions
+    : basicInstructions
+}
+
+========================
+REGOLE FINALI
+========================
+
+L'application pack deve essere specificamente
+adattato a questa posizione.
+
+Non produrre testo generico.
+
+Il CV deve riflettere il candidato reale.
+
+Se alcune informazioni necessarie non sono presenti,
+non inventarle.
+
+Per il CV adattato usa queste sezioni:
+
+- Nome / titolo professionale
+- Profilo professionale
+- Esperienza
+- Competenze
+- Disponibilità
+- Nota finale se necessaria
+
+Mantieni il CV semplice e professionale.
+`;
+
+    /*
+     * ---------------------------------------------------------
+     * 7. JSON SCHEMA
+     * ---------------------------------------------------------
+     */
+
+    const schemaProperties: Record<string, unknown> = {
+      whatsapp: {
+        type: "string",
+      },
+
+      email: {
+        type: "object",
+        properties: {
+          subject: {
+            type: "string",
+          },
+          body: {
+            type: "string",
+          },
+        },
+        required: ["subject", "body"],
+        additionalProperties: false,
+      },
+
+      coverLetter: {
+        type: "string",
+      },
+
+      interviewPrep: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            question: {
+              type: "string",
+            },
+            answer: {
+              type: "string",
+            },
+          },
+          required: ["question", "answer"],
+          additionalProperties: false,
+        },
+      },
+
+      cv: {
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+          },
+          profile: {
+            type: "string",
+          },
+          experience: {
+            type: "string",
+          },
+          skills: {
+            type: "string",
+          },
+          availability: {
+            type: "string",
+          },
+          note: {
+            type: "string",
+          },
+        },
+        required: [
+          "title",
+          "profile",
+          "experience",
+          "skills",
+          "availability",
+          "note",
+        ],
+        additionalProperties: false,
+      },
+    };
+
+    if (isPro) {
+      schemaProperties.matchScore = {
+        type: "number",
+      };
+
+      schemaProperties.matchAnalysis = {
+        type: "string",
+      };
+
+      schemaProperties.requirements = {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      };
+
+      schemaProperties.strategy = {
+        type: "string",
+      };
+
+      schemaProperties.checklist = {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      };
+
+      schemaProperties.qualityReport = {
+        type: "string",
+      };
+
+      schemaProperties.advancedInterview = {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            question: {
+              type: "string",
+            },
+            howToAnswer: {
+              type: "string",
+            },
+            focus: {
+              type: "string",
+            },
+            mistakes: {
+              type: "string",
+            },
+            example: {
+              type: "string",
+            },
+          },
+          required: [
+            "question",
+            "howToAnswer",
+            "focus",
+            "mistakes",
+            "example",
+          ],
+          additionalProperties: false,
+        },
+      };
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 8. GENERATE APPLICATION
+     * ---------------------------------------------------------
+     */
 
     const response = await openai.responses.create({
       model: "gpt-5.6-luna",
       store: false,
-
       input: prompt,
-
       text: {
         format: {
           type: "json_schema",
           name: "student_in_italy_application",
           strict: true,
-          schema: applicationSchema,
+          schema: {
+            type: "object",
+            properties: schemaProperties,
+            required: [
+              "whatsapp",
+              "email",
+              "coverLetter",
+              "interviewPrep",
+              "cv",
+              ...(isPro
+                ? [
+                    "matchScore",
+                    "matchAnalysis",
+                    "requirements",
+                    "strategy",
+                    "checklist",
+                    "qualityReport",
+                    "advancedInterview",
+                  ]
+                : []),
+            ],
+            additionalProperties: false,
+          },
         },
       },
     });
 
-    if (!response.output_text) {
+    const rawOutput = response.output_text;
+
+    if (!rawOutput) {
       return NextResponse.json(
         {
           success: false,
           error: "The AI returned an empty response.",
         },
-        { status: 502 }
+        { status: 500 }
       );
     }
 
-    // --------------------------------------------------
-    // 9. PARSE AI RESULT
-    // --------------------------------------------------
-
-    let applicationPack;
+    let applicationPack: Record<string, unknown>;
 
     try {
-      applicationPack = JSON.parse(
-        response.output_text
-      );
-    } catch (parseError) {
+      applicationPack = JSON.parse(rawOutput);
+    } catch (error) {
       console.error(
-        "OPENAI JSON PARSE ERROR:",
-        parseError
+        "AI JSON PARSE ERROR:",
+        error,
+        rawOutput
       );
 
       return NextResponse.json(
         {
           success: false,
           error:
-            "The AI returned an invalid application format.",
+            "The AI returned an invalid application pack.",
         },
-        { status: 502 }
+        { status: 500 }
       );
     }
 
-    // --------------------------------------------------
-    // 10. BASIC USERS DON'T GET PRO ANALYSIS
-    // --------------------------------------------------
+    /*
+     * ---------------------------------------------------------
+     * 9. SAVE APPLICATION
+     * ---------------------------------------------------------
+     */
 
-    if (!isPro) {
-      applicationPack.proAnalysis = {
-        matchScore: 0,
-        requirements: [],
-        strategy: [],
-        checklist: [],
-        qualityReport: [],
-        advancedInterviewPrep: [],
-      };
-    }
-
-    // --------------------------------------------------
-    // 11. SAVE APPLICATION
-    // --------------------------------------------------
+    const expiresAt = new Date(
+      Date.now() + 48 * 60 * 60 * 1000
+    ).toISOString();
 
     const { data: application, error: applicationError } =
       await supabase
         .from("applications")
         .insert({
           user_id: user.id,
-          job_id: jobId ? String(jobId) : null,
-          job_title: job,
-          company: company || null,
-          location: location || null,
+          job_id: jobId || null,
+          job_title: jobTitle,
+          company,
+          location,
           job_url: jobUrl || null,
-          job_description: description || null,
-          package_type: finalPackage,
+          job_description: safeJobDescription,
+          package_type: selectedPackage,
           credit_used: 1,
           content: applicationPack,
           status: "completed",
+          expires_at: expiresAt,
         })
-        .select()
+        .select("id")
         .single();
 
     if (applicationError || !application) {
@@ -499,41 +781,31 @@ Use professional Italian suitable for an Italian employer.
       return NextResponse.json(
         {
           success: false,
-          error: "Could not save your application.",
+          error:
+            "The application was generated but could not be saved.",
         },
         { status: 500 }
       );
     }
 
-    createdApplicationId = application.id;
-
-    // --------------------------------------------------
-    // 12. DEDUCT ONE CREDIT SAFELY
-    // --------------------------------------------------
-
     /*
-      We update only if the credits value is still the
-      same value that we originally read.
-
-      This prevents two simultaneous requests from both
-      successfully spending the same credit.
-    */
+     * ---------------------------------------------------------
+     * 10. SPEND ONE CREDIT
+     * ---------------------------------------------------------
+     */
 
     const expectedCredits = profile.credits;
-    const newCredits = expectedCredits - 1;
 
-    const {
-      data: updatedProfile,
-      error: creditError,
-    } = await supabase
-      .from("profiles")
-      .update({
-        credits: newCredits,
-      })
-      .eq("id", user.id)
-      .eq("credits", expectedCredits)
-      .select("credits")
-      .single();
+    const { data: updatedProfile, error: creditError } =
+      await supabase
+        .from("profiles")
+        .update({
+          credits: expectedCredits - 1,
+        })
+        .eq("id", user.id)
+        .eq("credits", expectedCredits)
+        .select("credits")
+        .single();
 
     if (
       creditError ||
@@ -544,42 +816,33 @@ Use professional Italian suitable for an Italian employer.
         creditError
       );
 
-      // Remove the application if the credit could not
-      // be safely consumed.
       await supabase
         .from("applications")
         .delete()
-        .eq("id", createdApplicationId)
+        .eq("id", application.id)
         .eq("user_id", user.id);
 
       return NextResponse.json(
         {
           success: false,
           error:
-            "Your application was not charged because your credit could not be reserved. Please try again.",
+            "Your application was not charged because the credit could not be reserved.",
         },
         { status: 409 }
       );
     }
 
-    // --------------------------------------------------
-    // 13. SUCCESS
-    // --------------------------------------------------
+    /*
+     * ---------------------------------------------------------
+     * 11. RETURN RESULT
+     * ---------------------------------------------------------
+     */
 
     return NextResponse.json({
       success: true,
-
       applicationId: application.id,
-
-      creditsRemaining:
-        updatedProfile.credits,
-
-      packageType: finalPackage,
-
-      message:
-        "Your application was prepared successfully.",
-
       applicationPack,
+      creditsRemaining: updatedProfile.credits,
     });
   } catch (error) {
     console.error(
@@ -587,35 +850,13 @@ Use professional Italian suitable for an Italian employer.
       error
     );
 
-    /*
-      If something unexpected happens after an application
-      was created, try to remove it so we don't leave
-      incomplete application data behind.
-    */
-
-    if (createdApplicationId) {
-      try {
-        const supabase = await createClient();
-
-        await supabase
-          .from("applications")
-          .delete()
-          .eq("id", createdApplicationId);
-      } catch (cleanupError) {
-        console.error(
-          "APPLICATION CLEANUP ERROR:",
-          cleanupError
-        );
-      }
-    }
-
     return NextResponse.json(
       {
         success: false,
         error:
           error instanceof Error
             ? error.message
-            : "Something went wrong while preparing your application.",
+            : "Something went wrong while creating the application.",
       },
       { status: 500 }
     );

@@ -124,8 +124,6 @@ function ApplicationForm() {
     setLoading(true);
     setMessage("");
 
-    const selectedCV = cvs.find((cv) => cv.id === selectedCv);
-
     try {
       const response = await fetch("/api/application", {
         method: "POST",
@@ -133,18 +131,26 @@ function ApplicationForm() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          // Job information
           jobId,
-          job,
+          jobTitle: job,
           company,
           location,
           jobUrl,
-          description,
-          name,
+          jobDescription: description,
+
+          // Candidate information
+          fullName: name,
+          phone: profile.phone || "",
           italianLevel,
           experience,
           skills,
           availability,
-          cvName: selectedCV?.file_name || null,
+
+          // REAL CV ID
+          cvId: selectedCv || null,
+
+          // Package
           packageType: profile.package_type,
         }),
       });
@@ -159,8 +165,8 @@ function ApplicationForm() {
 
       /*
        * Temporary bridge for the current result page.
-       * The next stage will make the result page load the
-       * application directly from Supabase using applicationId.
+       * The result page also loads the application from Supabase
+       * using applicationId.
        */
       sessionStorage.setItem(
         "applicationPack",
@@ -224,6 +230,7 @@ function ApplicationForm() {
   return (
     <main className="min-h-screen bg-gray-50 px-6 py-12">
       <div className="mx-auto max-w-3xl">
+
         <Link
           href="/jobs"
           className="text-sm font-medium text-green-600 hover:text-green-700"
@@ -232,6 +239,7 @@ function ApplicationForm() {
         </Link>
 
         <div className="mt-8 rounded-3xl bg-white p-8 shadow-sm">
+
           <p className="text-sm font-semibold text-green-600">
             YOUR APPLICATION
           </p>
@@ -245,6 +253,7 @@ function ApplicationForm() {
             application.
           </p>
 
+          {/* JOB */}
           <div className="mt-8 rounded-2xl bg-gray-50 p-5">
             <p className="text-sm text-gray-500">
               Applying for
@@ -267,11 +276,14 @@ function ApplicationForm() {
             )}
           </div>
 
+          {/* PACKAGE + CREDITS */}
           <div className="mt-6 grid grid-cols-2 gap-4">
+
             <div className="rounded-2xl border bg-white p-4">
               <p className="text-sm text-gray-500">
                 Package
               </p>
+
               <p className="mt-1 font-bold capitalize">
                 {profile.package_type === "none"
                   ? "No package"
@@ -283,16 +295,20 @@ function ApplicationForm() {
               <p className="text-sm text-gray-500">
                 Applications available
               </p>
+
               <p className="mt-1 text-2xl font-bold">
                 {profile.credits}
               </p>
             </div>
+
           </div>
 
           <form
             onSubmit={handleSubmit}
             className="mt-8 space-y-6"
           >
+
+            {/* CV */}
             {cvs.length > 0 ? (
               <div>
                 <label className="block text-sm font-semibold text-gray-900">
@@ -311,7 +327,10 @@ function ApplicationForm() {
                   className="mt-3 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-900 outline-none focus:border-green-600"
                 >
                   {cvs.map((cv) => (
-                    <option key={cv.id} value={cv.id}>
+                    <option
+                      key={cv.id}
+                      value={cv.id}
+                    >
                       {cv.file_name}
                     </option>
                   ))}
@@ -319,6 +338,7 @@ function ApplicationForm() {
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-5">
+
                 <p className="font-semibold text-gray-900">
                   No CV uploaded
                 </p>
@@ -334,9 +354,11 @@ function ApplicationForm() {
                 >
                   Manage my CVs →
                 </Link>
+
               </div>
             )}
 
+            {/* NAME */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your name
@@ -345,12 +367,15 @@ function ApplicationForm() {
               <input
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) =>
+                  setName(e.target.value)
+                }
                 required
                 className="mt-2 w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600"
               />
             </div>
 
+            {/* ITALIAN LEVEL */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your Italian level
@@ -364,7 +389,10 @@ function ApplicationForm() {
                 required
                 className="mt-2 w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600"
               >
-                <option value="">Select your level</option>
+                <option value="">
+                  Select your level
+                </option>
+
                 <option value="A1">A1</option>
                 <option value="A2">A2</option>
                 <option value="B1">B1</option>
@@ -374,6 +402,7 @@ function ApplicationForm() {
               </select>
             </div>
 
+            {/* EXPERIENCE */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your experience
@@ -390,6 +419,7 @@ function ApplicationForm() {
               />
             </div>
 
+            {/* SKILLS */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your skills
@@ -397,13 +427,16 @@ function ApplicationForm() {
 
               <textarea
                 value={skills}
-                onChange={(e) => setSkills(e.target.value)}
+                onChange={(e) =>
+                  setSkills(e.target.value)
+                }
                 rows={4}
                 required
                 className="mt-2 w-full rounded-xl border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-green-600"
               />
             </div>
 
+            {/* AVAILABILITY */}
             <div>
               <label className="block text-sm font-semibold text-gray-900">
                 Your availability
@@ -420,6 +453,7 @@ function ApplicationForm() {
               />
             </div>
 
+            {/* SUBMIT */}
             {profile.credits > 0 ? (
               <button
                 type="submit"
@@ -428,10 +462,11 @@ function ApplicationForm() {
               >
                 {loading
                   ? "Preparing your application..."
-                  : `Use 1 credit & prepare application →`}
+                  : "Use 1 credit & prepare application →"}
               </button>
             ) : (
               <div className="rounded-2xl bg-red-50 p-5">
+
                 <p className="font-semibold text-red-800">
                   You don't have any credits.
                 </p>
@@ -446,8 +481,10 @@ function ApplicationForm() {
                 >
                   View packages
                 </Link>
+
               </div>
             )}
+
           </form>
 
           {message && (
@@ -455,6 +492,7 @@ function ApplicationForm() {
               {message}
             </div>
           )}
+
         </div>
       </div>
     </main>
