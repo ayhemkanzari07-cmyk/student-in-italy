@@ -25,20 +25,23 @@ const PLANS = {
   },
 };
 
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
-    // Stripe is initialized only when the API is called.
-    // This allows the application to build without a Stripe key.
     const stripe = getStripe();
-
     const supabase = await createClient();
 
-    // Check authentication
+    // ---------------------------------------------------------
+    // 1. CHECK AUTHENTICATION
+    // ---------------------------------------------------------
+
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       return NextResponse.json(
         {
           error: "Unauthorized",
@@ -49,12 +52,14 @@ export async function POST(request: Request) {
       );
     }
 
-    // Read request body
+    // ---------------------------------------------------------
+    // 2. READ REQUEST
+    // ---------------------------------------------------------
+
     const body = await request.json();
 
     const plan = body?.plan as keyof typeof PLANS;
 
-    // Validate selected plan
     if (!plan || !PLANS[plan]) {
       return NextResponse.json(
         {
@@ -68,13 +73,19 @@ export async function POST(request: Request) {
 
     const selectedPlan = PLANS[plan];
 
-    // Determine website origin
+    // ---------------------------------------------------------
+    // 3. WEBSITE ORIGIN
+    // ---------------------------------------------------------
+
     const origin =
       request.headers.get("origin") ||
       process.env.NEXT_PUBLIC_SITE_URL ||
       "http://localhost:3000";
 
-    // Create Stripe Checkout Session
+    // ---------------------------------------------------------
+    // 4. CREATE STRIPE CHECKOUT SESSION
+    // ---------------------------------------------------------
+
     const session = await stripe.checkout.sessions.create({
       mode: selectedPlan.mode,
 
@@ -133,27 +144,31 @@ export async function POST(request: Request) {
       cancel_url: `${origin}/pricing?payment=cancelled`,
     });
 
-    // Save pending purchase.
-    // Credits are NOT added here.
-    // They will be added only after Stripe confirms payment
-    // through the webhook.
-    const { error: purchaseError } = await supabase
-      .from("purchases")
-      .insert({
-        user_id: user.id,
-        product_type: plan,
-        stripe_checkout_session_id: session.id,
-        credits_added: 0,
-        amount_cents: selectedPlan.amount,
-        currency: "eur",
-        status: "pending",
+    // ---------------------------------------------------------
+    // 5. CREATE PENDING PURCHASE SAFELY
+    //
+    // The browser/user does NOT get direct INSERT permission
+    // on purchases. Supabase creates it through a secure
+    // database function.
+    // ---------------------------------------------------------
+
+    const { data: purchaseResult, error: purchaseError } =
+      await supabase.rpc("create_pending_purchase", {
+        p_user_id: user.id,
+        p_product_type: plan,
+        p_amount_cents: selectedPlan.amount,
+        p_currency: "eur",
+        p_checkout_session_id: session.id,
       });
 
-    if (purchaseError) {
-      console.error("Purchase database error:", purchaseError);
+    if (purchaseError || !purchaseResult?.success) {
+      console.error(
+        "Purchase database error:",
+        purchaseError
+      );
 
-      // Try to expire the Checkout Session if we couldn't
-      // save the purchase in our database.
+      // If database creation failed, expire the Stripe session
+      // so the user cannot complete a payment that we cannot track.
       try {
         await stripe.checkout.sessions.expire(session.id);
       } catch (expireError) {
@@ -172,6 +187,10 @@ export async function POST(request: Request) {
         }
       );
     }
+
+    // ---------------------------------------------------------
+    // 6. RETURN STRIPE CHECKOUT URL
+    // ---------------------------------------------------------
 
     return NextResponse.json({
       success: true,
